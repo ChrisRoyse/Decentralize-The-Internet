@@ -460,6 +460,9 @@ from modules.config.config_loader import ConfigLoader
 from modules.monitoring.metrics_server import MetricsServer
 from modules.logging.log_config import configure_logging
 
+# Import new LLM components
+from modules.agents.llm_orchestrator import LLMOrchestrator
+
 # Configure logging
 logger = configure_logging()
 
@@ -490,7 +493,10 @@ class DecentralizedPipeline:
                             node_id=self.config["node"]["id"],
                             role=self.config["node"]["role"])
             
-            # Initialize security components first
+            # Initialize LLM orchestrator first
+            self.llm_orchestrator = LLMOrchestrator()
+            
+            # Initialize security components
             self.components["encryption"] = EncryptionManager(self.config)
             self.components["access_control"] = AccessControl(self.config)
             
@@ -501,17 +507,19 @@ class DecentralizedPipeline:
                 self.components["message_bus"]
             )
             
-            # Initialize knowledge graph components
+            # Initialize knowledge graph components with LLM resolution
             self.components["graph_manager"] = KnowledgeGraphManager(self.config)
-            self.components["entity_extractor"] = EntityExtractor()
-            self.components["conflict_resolver"] = ConflictResolver(self.config)
+            self.components["entity_extractor"] = EntityExtractor(
+                model_path=self.llm_orchestrator.model_path
+            )
+            self.components["conflict_resolver"] = ConflictResolver(
+                self.config,
+                llm_resolution_agent=self.llm_orchestrator.resolver
+            )
             
             # Initialize ingestion components
-            self.components["embedding_model"] = EmbeddingModel()
-            self.components["dedup_manager"] = DeduplicationManager(
-                self.config,
-                self.components["embedding_model"]
-            )
+            self.components["dedup_manager"] = DeduplicationManager(self.config)
+            self.components["compressor"] = Compressor()
             
             # Initialize crawler components
             self.components["frontier_manager"] = FrontierManager(
@@ -519,16 +527,18 @@ class DecentralizedPipeline:
                 self.components["message_bus"]
             )
             
+            # Initialize crawler with LLM orchestrator
             self.components["crawler"] = CrawlerAgent(
                 config=self.config,
                 frontier_manager=self.components["frontier_manager"],
                 deduper=self.components["dedup_manager"],
-                compressor=None,  # Optional compression
+                compressor=self.components["compressor"],
                 entity_extractor=self.components["entity_extractor"],
                 kg_manager=self.components["graph_manager"],
                 conflict_resolver=self.components["conflict_resolver"],
                 message_bus=self.components["message_bus"],
-                access_control=self.components["access_control"]
+                access_control=self.components["access_control"],
+                llm_orchestrator=self.llm_orchestrator  # Pass LLM orchestrator
             )
             
             # Start metrics server
@@ -642,6 +652,15 @@ scrape_configs:
 
 
 ================================================================================
+File: C:\aishrink\README.md
+================================================================================
+
+# Decentralize-The-Internet
+This program shrinks and decentralizes the internet.
+
+
+
+================================================================================
 File: C:\aishrink\requirements.txt
 ================================================================================
 
@@ -651,6 +670,11 @@ numpy==1.24.3
 scikit-learn==1.3.0
 torch==2.0.1
 transformers==4.31.0
+accelerate==0.24.1
+bitsandbytes==0.41.1
+einops==0.7.0
+scipy==1.11.3
+sentencepiece==0.1.99
 neo4j==5.8.0
 pyzmq==25.1.0
 pydantic==1.10.8
@@ -665,6 +689,1104 @@ prometheus_client==0.16.0
 psutil==5.9.5
 structlog==23.1.0
 python-json-logger==2.0.7 
+
+
+================================================================================
+File: C:\aishrink\.git\AUTO_MERGE
+================================================================================
+
+f0e959503e056245330ebb68c371e20585bbfb75
+
+
+
+================================================================================
+File: C:\aishrink\.git\COMMIT_EDITMSG
+================================================================================
+
+Initial commit
+
+
+
+================================================================================
+File: C:\aishrink\.git\config
+================================================================================
+
+[core]
+	repositoryformatversion = 0
+	filemode = false
+	bare = false
+	logallrefupdates = true
+	symlinks = false
+	ignorecase = true
+[remote "origin"]
+	url = https://github.com/ChrisRoyse/Decentralize-The-Internet.git
+	fetch = +refs/heads/*:refs/remotes/origin/*
+[branch "main"]
+	remote = origin
+	merge = refs/heads/main
+
+
+
+================================================================================
+File: C:\aishrink\.git\description
+================================================================================
+
+Unnamed repository; edit this file 'description' to name the repository.
+
+
+
+================================================================================
+File: C:\aishrink\.git\FETCH_HEAD
+================================================================================
+
+a9b3128f5e8785702984d16cf9210b195e3153d3		branch 'main' of https://github.com/ChrisRoyse/Decentralize-The-Internet
+
+
+
+================================================================================
+File: C:\aishrink\.git\HEAD
+================================================================================
+
+ref: refs/heads/main
+
+
+
+================================================================================
+File: C:\aishrink\.git\ORIG_HEAD
+================================================================================
+
+9bd64aa5cca4a8b6bc56fa2f0d1630a08934d865
+
+
+
+================================================================================
+File: C:\aishrink\.git\hooks\applypatch-msg.sample
+================================================================================
+
+#!/bin/sh
+#
+# An example hook script to check the commit log message taken by
+# applypatch from an e-mail message.
+#
+# The hook should exit with non-zero status after issuing an
+# appropriate message if it wants to stop the commit.  The hook is
+# allowed to edit the commit message file.
+#
+# To enable this hook, rename this file to "applypatch-msg".
+
+. git-sh-setup
+commitmsg="$(git rev-parse --git-path hooks/commit-msg)"
+test -x "$commitmsg" && exec "$commitmsg" ${1+"$@"}
+:
+
+
+
+================================================================================
+File: C:\aishrink\.git\hooks\commit-msg.sample
+================================================================================
+
+#!/bin/sh
+#
+# An example hook script to check the commit log message.
+# Called by "git commit" with one argument, the name of the file
+# that has the commit message.  The hook should exit with non-zero
+# status after issuing an appropriate message if it wants to stop the
+# commit.  The hook is allowed to edit the commit message file.
+#
+# To enable this hook, rename this file to "commit-msg".
+
+# Uncomment the below to add a Signed-off-by line to the message.
+# Doing this in a hook is a bad idea in general, but the prepare-commit-msg
+# hook is more suited to it.
+#
+# SOB=$(git var GIT_AUTHOR_IDENT | sed -n 's/^\(.*>\).*$/Signed-off-by: \1/p')
+# grep -qs "^$SOB" "$1" || echo "$SOB" >> "$1"
+
+# This example catches duplicate Signed-off-by lines.
+
+test "" = "$(grep '^Signed-off-by: ' "$1" |
+	 sort | uniq -c | sed -e '/^[ 	]*1[ 	]/d')" || {
+	echo >&2 Duplicate Signed-off-by lines.
+	exit 1
+}
+
+
+
+================================================================================
+File: C:\aishrink\.git\hooks\fsmonitor-watchman.sample
+================================================================================
+
+#!/usr/bin/perl
+
+use strict;
+use warnings;
+use IPC::Open2;
+
+# An example hook script to integrate Watchman
+# (https://facebook.github.io/watchman/) with git to speed up detecting
+# new and modified files.
+#
+# The hook is passed a version (currently 2) and last update token
+# formatted as a string and outputs to stdout a new update token and
+# all files that have been modified since the update token. Paths must
+# be relative to the root of the working tree and separated by a single NUL.
+#
+# To enable this hook, rename this file to "query-watchman" and set
+# 'git config core.fsmonitor .git/hooks/query-watchman'
+#
+my ($version, $last_update_token) = @ARGV;
+
+# Uncomment for debugging
+# print STDERR "$0 $version $last_update_token\n";
+
+# Check the hook interface version
+if ($version ne 2) {
+	die "Unsupported query-fsmonitor hook version '$version'.\n" .
+	    "Falling back to scanning...\n";
+}
+
+my $git_work_tree = get_working_dir();
+
+my $retry = 1;
+
+my $json_pkg;
+eval {
+	require JSON::XS;
+	$json_pkg = "JSON::XS";
+	1;
+} or do {
+	require JSON::PP;
+	$json_pkg = "JSON::PP";
+};
+
+launch_watchman();
+
+sub launch_watchman {
+	my $o = watchman_query();
+	if (is_work_tree_watched($o)) {
+		output_result($o->{clock}, @{$o->{files}});
+	}
+}
+
+sub output_result {
+	my ($clockid, @files) = @_;
+
+	# Uncomment for debugging watchman output
+	# open (my $fh, ">", ".git/watchman-output.out");
+	# binmode $fh, ":utf8";
+	# print $fh "$clockid\n@files\n";
+	# close $fh;
+
+	binmode STDOUT, ":utf8";
+	print $clockid;
+	print "\0";
+	local $, = "\0";
+	print @files;
+}
+
+sub watchman_clock {
+	my $response = qx/watchman clock "$git_work_tree"/;
+	die "Failed to get clock id on '$git_work_tree'.\n" .
+		"Falling back to scanning...\n" if $? != 0;
+
+	return $json_pkg->new->utf8->decode($response);
+}
+
+sub watchman_query {
+	my $pid = open2(\*CHLD_OUT, \*CHLD_IN, 'watchman -j --no-pretty')
+	or die "open2() failed: $!\n" .
+	"Falling back to scanning...\n";
+
+	# In the query expression below we're asking for names of files that
+	# changed since $last_update_token but not from the .git folder.
+	#
+	# To accomplish this, we're using the "since" generator to use the
+	# recency index to select candidate nodes and "fields" to limit the
+	# output to file names only. Then we're using the "expression" term to
+	# further constrain the results.
+	my $last_update_line = "";
+	if (substr($last_update_token, 0, 1) eq "c") {
+		$last_update_token = "\"$last_update_token\"";
+		$last_update_line = qq[\n"since": $last_update_token,];
+	}
+	my $query = <<"	END";
+		["query", "$git_work_tree", {$last_update_line
+			"fields": ["name"],
+			"expression": ["not", ["dirname", ".git"]]
+		}]
+	END
+
+	# Uncomment for debugging the watchman query
+	# open (my $fh, ">", ".git/watchman-query.json");
+	# print $fh $query;
+	# close $fh;
+
+	print CHLD_IN $query;
+	close CHLD_IN;
+	my $response = do {local $/; <CHLD_OUT>};
+
+	# Uncomment for debugging the watch response
+	# open ($fh, ">", ".git/watchman-response.json");
+	# print $fh $response;
+	# close $fh;
+
+	die "Watchman: command returned no output.\n" .
+	"Falling back to scanning...\n" if $response eq "";
+	die "Watchman: command returned invalid output: $response\n" .
+	"Falling back to scanning...\n" unless $response =~ /^\{/;
+
+	return $json_pkg->new->utf8->decode($response);
+}
+
+sub is_work_tree_watched {
+	my ($output) = @_;
+	my $error = $output->{error};
+	if ($retry > 0 and $error and $error =~ m/unable to resolve root .* directory (.*) is not watched/) {
+		$retry--;
+		my $response = qx/watchman watch "$git_work_tree"/;
+		die "Failed to make watchman watch '$git_work_tree'.\n" .
+		    "Falling back to scanning...\n" if $? != 0;
+		$output = $json_pkg->new->utf8->decode($response);
+		$error = $output->{error};
+		die "Watchman: $error.\n" .
+		"Falling back to scanning...\n" if $error;
+
+		# Uncomment for debugging watchman output
+		# open (my $fh, ">", ".git/watchman-output.out");
+		# close $fh;
+
+		# Watchman will always return all files on the first query so
+		# return the fast "everything is dirty" flag to git and do the
+		# Watchman query just to get it over with now so we won't pay
+		# the cost in git to look up each individual file.
+		my $o = watchman_clock();
+		$error = $output->{error};
+
+		die "Watchman: $error.\n" .
+		"Falling back to scanning...\n" if $error;
+
+		output_result($o->{clock}, ("/"));
+		$last_update_token = $o->{clock};
+
+		eval { launch_watchman() };
+		return 0;
+	}
+
+	die "Watchman: $error.\n" .
+	"Falling back to scanning...\n" if $error;
+
+	return 1;
+}
+
+sub get_working_dir {
+	my $working_dir;
+	if ($^O =~ 'msys' || $^O =~ 'cygwin') {
+		$working_dir = Win32::GetCwd();
+		$working_dir =~ tr/\\/\//;
+	} else {
+		require Cwd;
+		$working_dir = Cwd::cwd();
+	}
+
+	return $working_dir;
+}
+
+
+
+================================================================================
+File: C:\aishrink\.git\hooks\post-update.sample
+================================================================================
+
+#!/bin/sh
+#
+# An example hook script to prepare a packed repository for use over
+# dumb transports.
+#
+# To enable this hook, rename this file to "post-update".
+
+exec git update-server-info
+
+
+
+================================================================================
+File: C:\aishrink\.git\hooks\pre-applypatch.sample
+================================================================================
+
+#!/bin/sh
+#
+# An example hook script to verify what is about to be committed
+# by applypatch from an e-mail message.
+#
+# The hook should exit with non-zero status after issuing an
+# appropriate message if it wants to stop the commit.
+#
+# To enable this hook, rename this file to "pre-applypatch".
+
+. git-sh-setup
+precommit="$(git rev-parse --git-path hooks/pre-commit)"
+test -x "$precommit" && exec "$precommit" ${1+"$@"}
+:
+
+
+
+================================================================================
+File: C:\aishrink\.git\hooks\pre-commit.sample
+================================================================================
+
+#!/bin/sh
+#
+# An example hook script to verify what is about to be committed.
+# Called by "git commit" with no arguments.  The hook should
+# exit with non-zero status after issuing an appropriate message if
+# it wants to stop the commit.
+#
+# To enable this hook, rename this file to "pre-commit".
+
+if git rev-parse --verify HEAD >/dev/null 2>&1
+then
+	against=HEAD
+else
+	# Initial commit: diff against an empty tree object
+	against=$(git hash-object -t tree /dev/null)
+fi
+
+# If you want to allow non-ASCII filenames set this variable to true.
+allownonascii=$(git config --type=bool hooks.allownonascii)
+
+# Redirect output to stderr.
+exec 1>&2
+
+# Cross platform projects tend to avoid non-ASCII filenames; prevent
+# them from being added to the repository. We exploit the fact that the
+# printable range starts at the space character and ends with tilde.
+if [ "$allownonascii" != "true" ] &&
+	# Note that the use of brackets around a tr range is ok here, (it's
+	# even required, for portability to Solaris 10's /usr/bin/tr), since
+	# the square bracket bytes happen to fall in the designated range.
+	test $(git diff-index --cached --name-only --diff-filter=A -z $against |
+	  LC_ALL=C tr -d '[ -~]\0' | wc -c) != 0
+then
+	cat <<\EOF
+Error: Attempt to add a non-ASCII file name.
+
+This can cause problems if you want to work with people on other platforms.
+
+To be portable it is advisable to rename the file.
+
+If you know what you are doing you can disable this check using:
+
+  git config hooks.allownonascii true
+EOF
+	exit 1
+fi
+
+# If there are whitespace errors, print the offending file names and fail.
+exec git diff-index --check --cached $against --
+
+
+
+================================================================================
+File: C:\aishrink\.git\hooks\pre-merge-commit.sample
+================================================================================
+
+#!/bin/sh
+#
+# An example hook script to verify what is about to be committed.
+# Called by "git merge" with no arguments.  The hook should
+# exit with non-zero status after issuing an appropriate message to
+# stderr if it wants to stop the merge commit.
+#
+# To enable this hook, rename this file to "pre-merge-commit".
+
+. git-sh-setup
+test -x "$GIT_DIR/hooks/pre-commit" &&
+        exec "$GIT_DIR/hooks/pre-commit"
+:
+
+
+
+================================================================================
+File: C:\aishrink\.git\hooks\pre-push.sample
+================================================================================
+
+#!/bin/sh
+
+# An example hook script to verify what is about to be pushed.  Called by "git
+# push" after it has checked the remote status, but before anything has been
+# pushed.  If this script exits with a non-zero status nothing will be pushed.
+#
+# This hook is called with the following parameters:
+#
+# $1 -- Name of the remote to which the push is being done
+# $2 -- URL to which the push is being done
+#
+# If pushing without using a named remote those arguments will be equal.
+#
+# Information about the commits which are being pushed is supplied as lines to
+# the standard input in the form:
+#
+#   <local ref> <local oid> <remote ref> <remote oid>
+#
+# This sample shows how to prevent push of commits where the log message starts
+# with "WIP" (work in progress).
+
+remote="$1"
+url="$2"
+
+zero=$(git hash-object --stdin </dev/null | tr '[0-9a-f]' '0')
+
+while read local_ref local_oid remote_ref remote_oid
+do
+	if test "$local_oid" = "$zero"
+	then
+		# Handle delete
+		:
+	else
+		if test "$remote_oid" = "$zero"
+		then
+			# New branch, examine all commits
+			range="$local_oid"
+		else
+			# Update to existing branch, examine new commits
+			range="$remote_oid..$local_oid"
+		fi
+
+		# Check for WIP commit
+		commit=$(git rev-list -n 1 --grep '^WIP' "$range")
+		if test -n "$commit"
+		then
+			echo >&2 "Found WIP commit in $local_ref, not pushing"
+			exit 1
+		fi
+	fi
+done
+
+exit 0
+
+
+
+================================================================================
+File: C:\aishrink\.git\hooks\pre-rebase.sample
+================================================================================
+
+#!/bin/sh
+#
+# Copyright (c) 2006, 2008 Junio C Hamano
+#
+# The "pre-rebase" hook is run just before "git rebase" starts doing
+# its job, and can prevent the command from running by exiting with
+# non-zero status.
+#
+# The hook is called with the following parameters:
+#
+# $1 -- the upstream the series was forked from.
+# $2 -- the branch being rebased (or empty when rebasing the current branch).
+#
+# This sample shows how to prevent topic branches that are already
+# merged to 'next' branch from getting rebased, because allowing it
+# would result in rebasing already published history.
+
+publish=next
+basebranch="$1"
+if test "$#" = 2
+then
+	topic="refs/heads/$2"
+else
+	topic=`git symbolic-ref HEAD` ||
+	exit 0 ;# we do not interrupt rebasing detached HEAD
+fi
+
+case "$topic" in
+refs/heads/??/*)
+	;;
+*)
+	exit 0 ;# we do not interrupt others.
+	;;
+esac
+
+# Now we are dealing with a topic branch being rebased
+# on top of master.  Is it OK to rebase it?
+
+# Does the topic really exist?
+git show-ref -q "$topic" || {
+	echo >&2 "No such branch $topic"
+	exit 1
+}
+
+# Is topic fully merged to master?
+not_in_master=`git rev-list --pretty=oneline ^master "$topic"`
+if test -z "$not_in_master"
+then
+	echo >&2 "$topic is fully merged to master; better remove it."
+	exit 1 ;# we could allow it, but there is no point.
+fi
+
+# Is topic ever merged to next?  If so you should not be rebasing it.
+only_next_1=`git rev-list ^master "^$topic" ${publish} | sort`
+only_next_2=`git rev-list ^master           ${publish} | sort`
+if test "$only_next_1" = "$only_next_2"
+then
+	not_in_topic=`git rev-list "^$topic" master`
+	if test -z "$not_in_topic"
+	then
+		echo >&2 "$topic is already up to date with master"
+		exit 1 ;# we could allow it, but there is no point.
+	else
+		exit 0
+	fi
+else
+	not_in_next=`git rev-list --pretty=oneline ^${publish} "$topic"`
+	/usr/bin/perl -e '
+		my $topic = $ARGV[0];
+		my $msg = "* $topic has commits already merged to public branch:\n";
+		my (%not_in_next) = map {
+			/^([0-9a-f]+) /;
+			($1 => 1);
+		} split(/\n/, $ARGV[1]);
+		for my $elem (map {
+				/^([0-9a-f]+) (.*)$/;
+				[$1 => $2];
+			} split(/\n/, $ARGV[2])) {
+			if (!exists $not_in_next{$elem->[0]}) {
+				if ($msg) {
+					print STDERR $msg;
+					undef $msg;
+				}
+				print STDERR " $elem->[1]\n";
+			}
+		}
+	' "$topic" "$not_in_next" "$not_in_master"
+	exit 1
+fi
+
+<<\DOC_END
+
+This sample hook safeguards topic branches that have been
+published from being rewound.
+
+The workflow assumed here is:
+
+ * Once a topic branch forks from "master", "master" is never
+   merged into it again (either directly or indirectly).
+
+ * Once a topic branch is fully cooked and merged into "master",
+   it is deleted.  If you need to build on top of it to correct
+   earlier mistakes, a new topic branch is created by forking at
+   the tip of the "master".  This is not strictly necessary, but
+   it makes it easier to keep your history simple.
+
+ * Whenever you need to test or publish your changes to topic
+   branches, merge them into "next" branch.
+
+The script, being an example, hardcodes the publish branch name
+to be "next", but it is trivial to make it configurable via
+$GIT_DIR/config mechanism.
+
+With this workflow, you would want to know:
+
+(1) ... if a topic branch has ever been merged to "next".  Young
+    topic branches can have stupid mistakes you would rather
+    clean up before publishing, and things that have not been
+    merged into other branches can be easily rebased without
+    affecting other people.  But once it is published, you would
+    not want to rewind it.
+
+(2) ... if a topic branch has been fully merged to "master".
+    Then you can delete it.  More importantly, you should not
+    build on top of it -- other people may already want to
+    change things related to the topic as patches against your
+    "master", so if you need further changes, it is better to
+    fork the topic (perhaps with the same name) afresh from the
+    tip of "master".
+
+Let's look at this example:
+
+		   o---o---o---o---o---o---o---o---o---o "next"
+		  /       /           /           /
+		 /   a---a---b A     /           /
+		/   /               /           /
+	       /   /   c---c---c---c B         /
+	      /   /   /             \         /
+	     /   /   /   b---b C     \       /
+	    /   /   /   /             \     /
+    ---o---o---o---o---o---o---o---o---o---o---o "master"
+
+
+A, B and C are topic branches.
+
+ * A has one fix since it was merged up to "next".
+
+ * B has finished.  It has been fully merged up to "master" and "next",
+   and is ready to be deleted.
+
+ * C has not merged to "next" at all.
+
+We would want to allow C to be rebased, refuse A, and encourage
+B to be deleted.
+
+To compute (1):
+
+	git rev-list ^master ^topic next
+	git rev-list ^master        next
+
+	if these match, topic has not merged in next at all.
+
+To compute (2):
+
+	git rev-list master..topic
+
+	if this is empty, it is fully merged to "master".
+
+DOC_END
+
+
+
+================================================================================
+File: C:\aishrink\.git\hooks\pre-receive.sample
+================================================================================
+
+#!/bin/sh
+#
+# An example hook script to make use of push options.
+# The example simply echoes all push options that start with 'echoback='
+# and rejects all pushes when the "reject" push option is used.
+#
+# To enable this hook, rename this file to "pre-receive".
+
+if test -n "$GIT_PUSH_OPTION_COUNT"
+then
+	i=0
+	while test "$i" -lt "$GIT_PUSH_OPTION_COUNT"
+	do
+		eval "value=\$GIT_PUSH_OPTION_$i"
+		case "$value" in
+		echoback=*)
+			echo "echo from the pre-receive-hook: ${value#*=}" >&2
+			;;
+		reject)
+			exit 1
+		esac
+		i=$((i + 1))
+	done
+fi
+
+
+
+================================================================================
+File: C:\aishrink\.git\hooks\prepare-commit-msg.sample
+================================================================================
+
+#!/bin/sh
+#
+# An example hook script to prepare the commit log message.
+# Called by "git commit" with the name of the file that has the
+# commit message, followed by the description of the commit
+# message's source.  The hook's purpose is to edit the commit
+# message file.  If the hook fails with a non-zero status,
+# the commit is aborted.
+#
+# To enable this hook, rename this file to "prepare-commit-msg".
+
+# This hook includes three examples. The first one removes the
+# "# Please enter the commit message..." help message.
+#
+# The second includes the output of "git diff --name-status -r"
+# into the message, just before the "git status" output.  It is
+# commented because it doesn't cope with --amend or with squashed
+# commits.
+#
+# The third example adds a Signed-off-by line to the message, that can
+# still be edited.  This is rarely a good idea.
+
+COMMIT_MSG_FILE=$1
+COMMIT_SOURCE=$2
+SHA1=$3
+
+/usr/bin/perl -i.bak -ne 'print unless(m/^. Please enter the commit message/..m/^#$/)' "$COMMIT_MSG_FILE"
+
+# case "$COMMIT_SOURCE,$SHA1" in
+#  ,|template,)
+#    /usr/bin/perl -i.bak -pe '
+#       print "\n" . `git diff --cached --name-status -r`
+# 	 if /^#/ && $first++ == 0' "$COMMIT_MSG_FILE" ;;
+#  *) ;;
+# esac
+
+# SOB=$(git var GIT_COMMITTER_IDENT | sed -n 's/^\(.*>\).*$/Signed-off-by: \1/p')
+# git interpret-trailers --in-place --trailer "$SOB" "$COMMIT_MSG_FILE"
+# if test -z "$COMMIT_SOURCE"
+# then
+#   /usr/bin/perl -i.bak -pe 'print "\n" if !$first_line++' "$COMMIT_MSG_FILE"
+# fi
+
+
+
+================================================================================
+File: C:\aishrink\.git\hooks\push-to-checkout.sample
+================================================================================
+
+#!/bin/sh
+
+# An example hook script to update a checked-out tree on a git push.
+#
+# This hook is invoked by git-receive-pack(1) when it reacts to git
+# push and updates reference(s) in its repository, and when the push
+# tries to update the branch that is currently checked out and the
+# receive.denyCurrentBranch configuration variable is set to
+# updateInstead.
+#
+# By default, such a push is refused if the working tree and the index
+# of the remote repository has any difference from the currently
+# checked out commit; when both the working tree and the index match
+# the current commit, they are updated to match the newly pushed tip
+# of the branch. This hook is to be used to override the default
+# behaviour; however the code below reimplements the default behaviour
+# as a starting point for convenient modification.
+#
+# The hook receives the commit with which the tip of the current
+# branch is going to be updated:
+commit=$1
+
+# It can exit with a non-zero status to refuse the push (when it does
+# so, it must not modify the index or the working tree).
+die () {
+	echo >&2 "$*"
+	exit 1
+}
+
+# Or it can make any necessary changes to the working tree and to the
+# index to bring them to the desired state when the tip of the current
+# branch is updated to the new commit, and exit with a zero status.
+#
+# For example, the hook can simply run git read-tree -u -m HEAD "$1"
+# in order to emulate git fetch that is run in the reverse direction
+# with git push, as the two-tree form of git read-tree -u -m is
+# essentially the same as git switch or git checkout that switches
+# branches while keeping the local changes in the working tree that do
+# not interfere with the difference between the branches.
+
+# The below is a more-or-less exact translation to shell of the C code
+# for the default behaviour for git's push-to-checkout hook defined in
+# the push_to_deploy() function in builtin/receive-pack.c.
+#
+# Note that the hook will be executed from the repository directory,
+# not from the working tree, so if you want to perform operations on
+# the working tree, you will have to adapt your code accordingly, e.g.
+# by adding "cd .." or using relative paths.
+
+if ! git update-index -q --ignore-submodules --refresh
+then
+	die "Up-to-date check failed"
+fi
+
+if ! git diff-files --quiet --ignore-submodules --
+then
+	die "Working directory has unstaged changes"
+fi
+
+# This is a rough translation of:
+#
+#   head_has_history() ? "HEAD" : EMPTY_TREE_SHA1_HEX
+if git cat-file -e HEAD 2>/dev/null
+then
+	head=HEAD
+else
+	head=$(git hash-object -t tree --stdin </dev/null)
+fi
+
+if ! git diff-index --quiet --cached --ignore-submodules $head --
+then
+	die "Working directory has staged changes"
+fi
+
+if ! git read-tree -u -m "$commit"
+then
+	die "Could not update working tree to new HEAD"
+fi
+
+
+
+================================================================================
+File: C:\aishrink\.git\hooks\sendemail-validate.sample
+================================================================================
+
+#!/bin/sh
+
+# An example hook script to validate a patch (and/or patch series) before
+# sending it via email.
+#
+# The hook should exit with non-zero status after issuing an appropriate
+# message if it wants to prevent the email(s) from being sent.
+#
+# To enable this hook, rename this file to "sendemail-validate".
+#
+# By default, it will only check that the patch(es) can be applied on top of
+# the default upstream branch without conflicts in a secondary worktree. After
+# validation (successful or not) of the last patch of a series, the worktree
+# will be deleted.
+#
+# The following config variables can be set to change the default remote and
+# remote ref that are used to apply the patches against:
+#
+#   sendemail.validateRemote (default: origin)
+#   sendemail.validateRemoteRef (default: HEAD)
+#
+# Replace the TODO placeholders with appropriate checks according to your
+# needs.
+
+validate_cover_letter () {
+	file="$1"
+	# TODO: Replace with appropriate checks (e.g. spell checking).
+	true
+}
+
+validate_patch () {
+	file="$1"
+	# Ensure that the patch applies without conflicts.
+	git am -3 "$file" || return
+	# TODO: Replace with appropriate checks for this patch
+	# (e.g. checkpatch.pl).
+	true
+}
+
+validate_series () {
+	# TODO: Replace with appropriate checks for the whole series
+	# (e.g. quick build, coding style checks, etc.).
+	true
+}
+
+# main -------------------------------------------------------------------------
+
+if test "$GIT_SENDEMAIL_FILE_COUNTER" = 1
+then
+	remote=$(git config --default origin --get sendemail.validateRemote) &&
+	ref=$(git config --default HEAD --get sendemail.validateRemoteRef) &&
+	worktree=$(mktemp --tmpdir -d sendemail-validate.XXXXXXX) &&
+	git worktree add -fd --checkout "$worktree" "refs/remotes/$remote/$ref" &&
+	git config --replace-all sendemail.validateWorktree "$worktree"
+else
+	worktree=$(git config --get sendemail.validateWorktree)
+fi || {
+	echo "sendemail-validate: error: failed to prepare worktree" >&2
+	exit 1
+}
+
+unset GIT_DIR GIT_WORK_TREE
+cd "$worktree" &&
+
+if grep -q "^diff --git " "$1"
+then
+	validate_patch "$1"
+else
+	validate_cover_letter "$1"
+fi &&
+
+if test "$GIT_SENDEMAIL_FILE_COUNTER" = "$GIT_SENDEMAIL_FILE_TOTAL"
+then
+	git config --unset-all sendemail.validateWorktree &&
+	trap 'git worktree remove -ff "$worktree"' EXIT &&
+	validate_series
+fi
+
+
+
+================================================================================
+File: C:\aishrink\.git\hooks\update.sample
+================================================================================
+
+#!/bin/sh
+#
+# An example hook script to block unannotated tags from entering.
+# Called by "git receive-pack" with arguments: refname sha1-old sha1-new
+#
+# To enable this hook, rename this file to "update".
+#
+# Config
+# ------
+# hooks.allowunannotated
+#   This boolean sets whether unannotated tags will be allowed into the
+#   repository.  By default they won't be.
+# hooks.allowdeletetag
+#   This boolean sets whether deleting tags will be allowed in the
+#   repository.  By default they won't be.
+# hooks.allowmodifytag
+#   This boolean sets whether a tag may be modified after creation. By default
+#   it won't be.
+# hooks.allowdeletebranch
+#   This boolean sets whether deleting branches will be allowed in the
+#   repository.  By default they won't be.
+# hooks.denycreatebranch
+#   This boolean sets whether remotely creating branches will be denied
+#   in the repository.  By default this is allowed.
+#
+
+# --- Command line
+refname="$1"
+oldrev="$2"
+newrev="$3"
+
+# --- Safety check
+if [ -z "$GIT_DIR" ]; then
+	echo "Don't run this script from the command line." >&2
+	echo " (if you want, you could supply GIT_DIR then run" >&2
+	echo "  $0 <ref> <oldrev> <newrev>)" >&2
+	exit 1
+fi
+
+if [ -z "$refname" -o -z "$oldrev" -o -z "$newrev" ]; then
+	echo "usage: $0 <ref> <oldrev> <newrev>" >&2
+	exit 1
+fi
+
+# --- Config
+allowunannotated=$(git config --type=bool hooks.allowunannotated)
+allowdeletebranch=$(git config --type=bool hooks.allowdeletebranch)
+denycreatebranch=$(git config --type=bool hooks.denycreatebranch)
+allowdeletetag=$(git config --type=bool hooks.allowdeletetag)
+allowmodifytag=$(git config --type=bool hooks.allowmodifytag)
+
+# check for no description
+projectdesc=$(sed -e '1q' "$GIT_DIR/description")
+case "$projectdesc" in
+"Unnamed repository"* | "")
+	echo "*** Project description file hasn't been set" >&2
+	exit 1
+	;;
+esac
+
+# --- Check types
+# if $newrev is 0000...0000, it's a commit to delete a ref.
+zero=$(git hash-object --stdin </dev/null | tr '[0-9a-f]' '0')
+if [ "$newrev" = "$zero" ]; then
+	newrev_type=delete
+else
+	newrev_type=$(git cat-file -t $newrev)
+fi
+
+case "$refname","$newrev_type" in
+	refs/tags/*,commit)
+		# un-annotated tag
+		short_refname=${refname##refs/tags/}
+		if [ "$allowunannotated" != "true" ]; then
+			echo "*** The un-annotated tag, $short_refname, is not allowed in this repository" >&2
+			echo "*** Use 'git tag [ -a | -s ]' for tags you want to propagate." >&2
+			exit 1
+		fi
+		;;
+	refs/tags/*,delete)
+		# delete tag
+		if [ "$allowdeletetag" != "true" ]; then
+			echo "*** Deleting a tag is not allowed in this repository" >&2
+			exit 1
+		fi
+		;;
+	refs/tags/*,tag)
+		# annotated tag
+		if [ "$allowmodifytag" != "true" ] && git rev-parse $refname > /dev/null 2>&1
+		then
+			echo "*** Tag '$refname' already exists." >&2
+			echo "*** Modifying a tag is not allowed in this repository." >&2
+			exit 1
+		fi
+		;;
+	refs/heads/*,commit)
+		# branch
+		if [ "$oldrev" = "$zero" -a "$denycreatebranch" = "true" ]; then
+			echo "*** Creating a branch is not allowed in this repository" >&2
+			exit 1
+		fi
+		;;
+	refs/heads/*,delete)
+		# delete branch
+		if [ "$allowdeletebranch" != "true" ]; then
+			echo "*** Deleting a branch is not allowed in this repository" >&2
+			exit 1
+		fi
+		;;
+	refs/remotes/*,commit)
+		# tracking branch
+		;;
+	refs/remotes/*,delete)
+		# delete tracking branch
+		if [ "$allowdeletebranch" != "true" ]; then
+			echo "*** Deleting a tracking branch is not allowed in this repository" >&2
+			exit 1
+		fi
+		;;
+	*)
+		# Anything else (is there anything else?)
+		echo "*** Update hook: unknown type of update to ref $refname of type $newrev_type" >&2
+		exit 1
+		;;
+esac
+
+# --- Finished
+exit 0
+
+
+
+================================================================================
+File: C:\aishrink\.git\info\exclude
+================================================================================
+
+# git ls-files --others --exclude-from=.git/info/exclude
+# Lines that start with '#' are comments.
+# For a project mostly in C, the following would be a good set of
+# exclude patterns (uncomment them if you want to use them):
+# *.[oa]
+# *~
+
+
+
+================================================================================
+File: C:\aishrink\.git\logs\HEAD
+================================================================================
+
+0000000000000000000000000000000000000000 9bd64aa5cca4a8b6bc56fa2f0d1630a08934d865 Chris Royse <thenumberonellc@gmail.com> 1738077614 -0600	commit (initial): Initial commit
+9bd64aa5cca4a8b6bc56fa2f0d1630a08934d865 0000000000000000000000000000000000000000 Chris Royse <thenumberonellc@gmail.com> 1738077903 -0600	Branch: renamed refs/heads/master to refs/heads/main
+0000000000000000000000000000000000000000 9bd64aa5cca4a8b6bc56fa2f0d1630a08934d865 Chris Royse <thenumberonellc@gmail.com> 1738077903 -0600	Branch: renamed refs/heads/master to refs/heads/main
+9bd64aa5cca4a8b6bc56fa2f0d1630a08934d865 0000000000000000000000000000000000000000 Chris Royse <thenumberonellc@gmail.com> 1738078195 -0600	Branch: renamed refs/heads/main to refs/heads/main
+9bd64aa5cca4a8b6bc56fa2f0d1630a08934d865 9bd64aa5cca4a8b6bc56fa2f0d1630a08934d865 Chris Royse <thenumberonellc@gmail.com> 1738078195 -0600	Branch: renamed refs/heads/main to refs/heads/main
+9bd64aa5cca4a8b6bc56fa2f0d1630a08934d865 a9b3128f5e8785702984d16cf9210b195e3153d3 Chris Royse <thenumberonellc@gmail.com> 1738078247 -0600	pull --rebase origin main (start): checkout a9b3128f5e8785702984d16cf9210b195e3153d3
+a9b3128f5e8785702984d16cf9210b195e3153d3 85c972063cc8bc6b6e3704eb5e945338207f4219 Chris Royse <thenumberonellc@gmail.com> 1738078247 -0600	pull --rebase origin main (pick): Initial commit
+85c972063cc8bc6b6e3704eb5e945338207f4219 85c972063cc8bc6b6e3704eb5e945338207f4219 Chris Royse <thenumberonellc@gmail.com> 1738078247 -0600	pull --rebase origin main (finish): returning to refs/heads/main
+
+
+
+================================================================================
+File: C:\aishrink\.git\logs\refs\heads\main
+================================================================================
+
+0000000000000000000000000000000000000000 9bd64aa5cca4a8b6bc56fa2f0d1630a08934d865 Chris Royse <thenumberonellc@gmail.com> 1738077614 -0600	commit (initial): Initial commit
+9bd64aa5cca4a8b6bc56fa2f0d1630a08934d865 9bd64aa5cca4a8b6bc56fa2f0d1630a08934d865 Chris Royse <thenumberonellc@gmail.com> 1738077903 -0600	Branch: renamed refs/heads/master to refs/heads/main
+9bd64aa5cca4a8b6bc56fa2f0d1630a08934d865 9bd64aa5cca4a8b6bc56fa2f0d1630a08934d865 Chris Royse <thenumberonellc@gmail.com> 1738078195 -0600	Branch: renamed refs/heads/main to refs/heads/main
+9bd64aa5cca4a8b6bc56fa2f0d1630a08934d865 85c972063cc8bc6b6e3704eb5e945338207f4219 Chris Royse <thenumberonellc@gmail.com> 1738078247 -0600	pull --rebase origin main (finish): refs/heads/main onto a9b3128f5e8785702984d16cf9210b195e3153d3
+
+
+
+================================================================================
+File: C:\aishrink\.git\logs\refs\remotes\origin\main
+================================================================================
+
+0000000000000000000000000000000000000000 a9b3128f5e8785702984d16cf9210b195e3153d3 Chris Royse <thenumberonellc@gmail.com> 1738078247 -0600	pull --rebase origin main: storing head
+a9b3128f5e8785702984d16cf9210b195e3153d3 85c972063cc8bc6b6e3704eb5e945338207f4219 Chris Royse <thenumberonellc@gmail.com> 1738078253 -0600	update by push
+
+
+
+================================================================================
+File: C:\aishrink\.git\refs\heads\main
+================================================================================
+
+85c972063cc8bc6b6e3704eb5e945338207f4219
+
+
+
+================================================================================
+File: C:\aishrink\.git\refs\remotes\origin\main
+================================================================================
+
+85c972063cc8bc6b6e3704eb5e945338207f4219
+
 
 
 ================================================================================
@@ -1412,6 +2534,325 @@ providers:
 
 
 ================================================================================
+File: C:\aishrink\modules\agents\entity_extraction_agent.py
+================================================================================
+
+import logging
+from typing import List, Dict, Any
+from .llm_agent import BaseLLMAgent
+
+logger = logging.getLogger(__name__)
+
+class EntityExtractionAgent(BaseLLMAgent):
+    """Uses DeepSeek to extract entities and relationships using LSF framework."""
+    
+    def extract_entities(self, text: str, source: str = "unknown") -> List[Dict[str, Any]]:
+        """Extract entity relationships using Long Structured Framework."""
+        prompt = self._format_long_prompt(
+            role="You are an expert knowledge graph entity extractor.",
+            objective="Extract structured entity relationships from unstructured text.",
+            context="""This extraction will be used to build a knowledge graph of real-world facts.
+Focus on concrete, verifiable relationships between entities. Avoid speculation or uncertain claims.""",
+            instructions=f"""Analyze this text and extract entity relationships:
+
+{text}
+
+For each relationship found:
+1. Identify two concrete entities (companies, people, products, etc.)
+2. Define their relationship type (acquired, partnered, launched, etc.)
+3. Assign a confidence score based on:
+   - Statement clarity (direct vs implied)
+   - Source reliability
+   - Information completeness
+
+Output Format:
+Return a JSON array of relationships, where each has:
+- entity1: The first entity name
+- relation: The relationship type
+- entity2: The second entity name
+- confidence: Float 0.0-1.0
+- source: "{source}"
+
+Example:
+[{{"entity1": "TechCorp", "relation": "acquired", "entity2": "StartupX", "confidence": 0.95}}]
+
+Rules:
+- Only extract explicitly stated relationships
+- Use normalized entity names (full company names, etc.)
+- Assign high confidence (>0.8) only to clear, direct statements
+- Include source attribution""",
+            examples=[
+                {
+                    "input": "Microsoft announced today it has acquired Activision Blizzard for $69 billion.",
+                    "output": '[{"entity1": "Microsoft", "relation": "acquired", "entity2": "Activision Blizzard", "confidence": 0.98}]'
+                }
+            ]
+        )
+        
+        response = self._call_llm(prompt, max_length=2048, temperature=0.3)
+        
+        try:
+            import json
+            facts = json.loads(response)
+            
+            # Validate and clean facts
+            validated_facts = []
+            for fact in facts:
+                if all(k in fact for k in ["entity1", "relation", "entity2", "confidence"]):
+                    fact["source"] = source
+                    validated_facts.append(fact)
+            
+            return validated_facts
+            
+        except Exception as e:
+            logger.error(f"Error parsing entity extraction response: {e}")
+            return []
+
+    def _format_long_prompt(self, role: str, objective: str, context: str, 
+                          instructions: str, examples: List[Dict[str, str]]) -> str:
+        """Format prompt using Long Structured Framework from paper."""
+        example_text = ""
+        if examples:
+            example_text = "\n\n# Examples\n"
+            for i, example in enumerate(examples, 1):
+                example_text += f"""Example {i}:
+Input: {example['input']}
+Output: {example['output']}\n"""
+
+        return f"""# Role
+{role}
+
+# Objective
+{objective}
+
+# Context
+{context}
+
+# Instructions
+{instructions}
+{example_text}
+Response:""" 
+
+
+================================================================================
+File: C:\aishrink\modules\agents\llm_agent.py
+================================================================================
+
+import logging
+import torch
+from typing import List, Dict, Any, Optional
+from transformers import (
+    AutoModelForCausalLM, 
+    AutoTokenizer,
+    BitsAndBytesConfig
+)
+
+logger = logging.getLogger(__name__)
+
+class BaseLLMAgent:
+    """Base class for LLM Agents using local DeepSeek inference."""
+    
+    def __init__(self, 
+                 model_path: str = "deepseek-ai/deepseek-coder-33b-instruct",
+                 device: str = "cuda",
+                 quantization: bool = True):
+        self.device = device
+        
+        # Configure quantization for quantum hardware
+        quantization_config = BitsAndBytesConfig(
+            load_in_4bit=True,
+            bnb_4bit_compute_dtype=torch.float16,
+            bnb_4bit_use_double_quant=True,
+        ) if quantization else None
+        
+        logger.info(f"Loading DeepSeek model {model_path} on {device}")
+        self.tokenizer = AutoTokenizer.from_pretrained(model_path)
+        self.model = AutoModelForCausalLM.from_pretrained(
+            model_path,
+            device_map=device,
+            quantization_config=quantization_config,
+            trust_remote_code=True
+        )
+        
+        # Enable model parallelism for quantum acceleration
+        if hasattr(self.model, "enable_model_parallel"):
+            self.model.enable_model_parallel()
+        
+        logger.info("DeepSeek model loaded successfully")
+
+    def _format_prompt(self, role: str, objective: str, instructions: str) -> str:
+        """Format prompt using the Short Structured Framework."""
+        return f"""# Role
+{role}
+
+# Objective
+{objective}
+
+# Instructions
+{instructions}
+
+Response:"""
+
+    def _call_llm(self, prompt: str, max_length: int = 512, temperature: float = 0.7) -> str:
+        """Generate response using local DeepSeek model."""
+        try:
+            inputs = self.tokenizer(prompt, return_tensors="pt").to(self.device)
+            
+            with torch.inference_mode():
+                outputs = self.model.generate(
+                    **inputs,
+                    max_length=max_length,
+                    num_return_sequences=1,
+                    temperature=temperature,
+                    do_sample=True,
+                    top_p=0.95,  # DeepSeek recommended
+                    top_k=50     # DeepSeek recommended
+                )
+            
+            response = self.tokenizer.decode(outputs[0], skip_special_tokens=True)
+            return response.replace(prompt, "").strip()
+            
+        except Exception as e:
+            logger.error(f"Error generating response: {e}")
+            return ""
+
+class PlannerAgent(BaseLLMAgent):
+    """Uses DeepSeek to prioritize URLs for crawling."""
+    
+    def rank_urls(self, candidate_urls: List[str]) -> List[str]:
+        prompt = self._format_prompt(
+            role="You are an expert web crawler prioritization agent.",
+            objective="Rank the provided URLs based on their potential information value.",
+            instructions=f"""Given these URLs, provide a priority order based on:
+1. Likely information richness
+2. Source credibility
+3. Content freshness
+
+URLs to rank:
+{candidate_urls}
+
+Output the URLs in priority order, one per line.
+Do not include any additional text or explanations."""
+        )
+        
+        response = self._call_llm(prompt, temperature=0.3)  # Lower temp for consistency
+        
+        # Parse response into list of URLs
+        ranked_urls = [url.strip() for url in response.split("\n") if url.strip()]
+        
+        # Ensure we don't lose any URLs
+        remaining = set(candidate_urls) - set(ranked_urls)
+        ranked_urls.extend(list(remaining))
+        
+        return ranked_urls
+
+class ComparisonAgent(BaseLLMAgent):
+    """Uses DeepSeek to detect duplicate content."""
+    
+    def is_duplicate(self, new_text: str, existing_text: str) -> bool:
+        prompt = self._format_prompt(
+            role="You are a precise content comparison specialist.",
+            objective="Determine if two texts contain essentially the same information.",
+            instructions=f"""Compare these texts for semantic similarity:
+
+Text 1:
+{existing_text}
+
+Text 2:
+{new_text}
+
+Respond with EXACTLY one word: either "DUPLICATE" or "UNIQUE".
+Consider texts duplicate if they convey the same core information, even if worded differently."""
+        )
+        
+        response = self._call_llm(prompt, max_length=256, temperature=0.1)
+        return "duplicate" in response.lower()
+
+class ResolutionAgent(BaseLLMAgent):
+    """Uses DeepSeek to resolve knowledge graph conflicts."""
+    
+    def resolve_conflict(self, existing_fact: Dict[str, Any], new_fact: Dict[str, Any]) -> Dict[str, Any]:
+        prompt = self._format_prompt(
+            role="You are a knowledge graph conflict resolution expert.",
+            objective="Resolve conflicts between competing facts in a knowledge graph.",
+            instructions=f"""Analyze these potentially conflicting facts:
+
+Existing fact: {existing_fact}
+New fact: {new_fact}
+
+Respond in strict JSON format with these fields:
+- action: "overwrite", "keep_existing", or "store_disputed"
+- reason: Brief explanation of your decision
+- final_confidence: Float between 0.0 and 1.0
+
+Base your decision on:
+1. Source credibility
+2. Information recency
+3. Fact specificity
+4. Confidence scores"""
+        )
+        
+        response = self._call_llm(prompt, temperature=0.2)
+        
+        try:
+            import json
+            result = json.loads(response)
+            return {
+                "action": result.get("action", "keep_existing"),
+                "reason": result.get("reason", "Failed to parse response"),
+                "final_confidence": float(result.get("final_confidence", 0.5))
+            }
+        except Exception as e:
+            logger.error(f"Error parsing resolution response: {e}")
+            return {
+                "action": "keep_existing",
+                "reason": "Error parsing response",
+                "final_confidence": 0.5
+            } 
+
+
+================================================================================
+File: C:\aishrink\modules\agents\llm_orchestrator.py
+================================================================================
+
+import logging
+from typing import Optional
+from .llm_agent import PlannerAgent, ComparisonAgent, ResolutionAgent
+from .entity_extraction_agent import EntityExtractionAgent
+
+logger = logging.getLogger(__name__)
+
+class LLMOrchestrator:
+    """Coordinates specialized LLM agents using local quantum-accelerated inference."""
+    
+    def __init__(self, model_path: Optional[str] = None):
+        # Use a single model path for all agents to save memory
+        self.model_path = model_path or "mistralai/Mistral-7B-v0.1"
+        
+        logger.info(f"Initializing LLM agents with model: {self.model_path}")
+        
+        # Initialize agents with same model
+        self.planner = PlannerAgent(model_path=self.model_path)
+        self.comparer = ComparisonAgent(model_path=self.model_path)
+        self.resolver = ResolutionAgent(model_path=self.model_path)
+        self.extractor = EntityExtractionAgent(model_path=self.model_path)
+        
+        logger.info("LLM agents initialized successfully")
+
+    def plan_crawl(self, candidate_urls):
+        return self.planner.rank_urls(candidate_urls)
+
+    def deduplicate(self, new_text, existing_text):
+        return self.comparer.is_duplicate(new_text, existing_text)
+
+    def resolve_facts(self, existing_fact, new_fact):
+        return self.resolver.resolve_conflict(existing_fact, new_fact)
+
+    def extract_entities(self, text: str, source: str = "unknown"):
+        return self.extractor.extract_entities(text, source) 
+
+
+================================================================================
 File: C:\aishrink\modules\config\config_loader.py
 ================================================================================
 
@@ -1828,11 +3269,9 @@ class GPUCompressor(Compressor):
 File: C:\aishrink\modules\ingestion\dedup.py
 ================================================================================
 
-import numpy as np
-import hashlib
+import logging
 import uuid
 from typing import Tuple, Optional
-import logging
 from dataclasses import dataclass
 
 logger = logging.getLogger(__name__)
@@ -1840,67 +3279,28 @@ logger = logging.getLogger(__name__)
 @dataclass
 class ChunkInfo:
     chunk_id: str
-    embedding: np.ndarray
-    signature: str
+    text: str
 
 class DeduplicationManager:
-    """Handles document deduplication using embeddings and LSH"""
+    """Uses LLM-based comparison for deduplication."""
     
-    def __init__(self, config, embedding_model):
+    def __init__(self, config):
         self.config = config
-        self.embedding_model = embedding_model
-        self.similarity_threshold = config["dedup"]["similarity_threshold"]
-        
-        # Store chunk info for deduplication
-        self.chunks: dict[str, ChunkInfo] = {}  # signature -> ChunkInfo
-        
-    def process_chunk(self, text: str) -> Tuple[bool, Optional[str], Optional[bytes]]:
-        """
-        Process a text chunk and determine if it's new.
-        Returns: (is_new, chunk_id, compressed_data)
-        """
-        try:
-            # Generate embedding
-            embedding = self.embedding_model.get_embedding(text)
-            
-            # Generate signature from embedding
-            signature = self._generate_signature(embedding)
-            
-            # Check if we've seen this signature
-            if signature in self.chunks:
-                logger.debug(f"Duplicate chunk found with signature {signature}")
-                return False, self.chunks[signature].chunk_id, None
-                
-            # New chunk - store it
-            chunk_id = str(uuid.uuid4())
-            self.chunks[signature] = ChunkInfo(
-                chunk_id=chunk_id,
-                embedding=embedding,
-                signature=signature
-            )
-            
-            # Compress the text (could be more sophisticated)
-            compressed = text.encode('utf-8')
-            
-            logger.debug(f"New chunk stored with ID {chunk_id}")
-            return True, chunk_id, compressed
-            
-        except Exception as e:
-            logger.error(f"Error processing chunk: {e}")
-            return False, None, None
-            
-    def _generate_signature(self, embedding: np.ndarray) -> str:
-        """Generate a signature from an embedding for quick comparison"""
-        # Simple approach: round embedding values and hash
-        rounded = np.round(embedding, decimals=2)
-        signature_input = ",".join(str(x) for x in rounded)
-        return hashlib.md5(signature_input.encode('utf-8')).hexdigest()
-        
-    def check_similarity(self, embedding1: np.ndarray, embedding2: np.ndarray) -> float:
-        """Compute cosine similarity between embeddings"""
-        return np.dot(embedding1, embedding2) / (
-            np.linalg.norm(embedding1) * np.linalg.norm(embedding2)
-        ) 
+        self.chunks = {}  # chunk_id -> ChunkInfo
+
+    def process_chunk_llm(self, text: str, llm_comparer) -> bool:
+        """Return True if chunk is new, False if duplicate."""
+        # Check against existing chunks
+        for chunk_info in self.chunks.values():
+            if llm_comparer.is_duplicate(new_text=text, existing_text=chunk_info.text):
+                logger.debug(f"Duplicate chunk found by LLM: {chunk_info.chunk_id}")
+                return False
+
+        # Store new chunk
+        chunk_id = str(uuid.uuid4())
+        self.chunks[chunk_id] = ChunkInfo(chunk_id=chunk_id, text=text)
+        logger.debug(f"New chunk stored with ID {chunk_id}")
+        return True 
 
 
 ================================================================================
@@ -1976,308 +3376,76 @@ class EmbeddingModel:
 File: C:\aishrink\modules\knowledge_graph\conflict_resolution.py
 ================================================================================
 
-from typing import Dict, Literal, Tuple
 import logging
+from typing import Dict, Any
 from dataclasses import dataclass
-from urllib.parse import urlparse
 
 logger = logging.getLogger(__name__)
 
-ResolutionType = Literal["keep_existing", "overwrite", "store_disputed"]
-
 @dataclass
 class ResolutionResult:
-    action: ResolutionType
+    action: str           # "keep_existing", "overwrite", "store_disputed"
     final_confidence: float
     reason: str = ""
 
 class ConflictResolver:
-    """
-    Handles conflicting edges in the knowledge graph based on confidence scores,
-    domain trust, and explicit bias configuration.
-    """
+    """Uses LLM ResolutionAgent to resolve knowledge graph conflicts."""
     
-    def __init__(self, config):
+    def __init__(self, config, llm_resolution_agent=None):
         self.config = config
-        self.conflict_policy = config["knowledge_graph"].get("conflict_policy", "store_disputed")
+        self.llm_resolution_agent = llm_resolution_agent
         
-        # Load trust scores and bias overrides
-        kg_config = config["knowledge_graph"]
-        self.domain_trust_scores = kg_config.get("domain_trust_scores", {})
-        self.bias_overrides = kg_config.get("bias_overrides", {})
-        
-        # Extract official sources and domain boosts
-        self.official_sources = self.bias_overrides.get("official_sources", [])
-        self.domain_boost = self.bias_overrides.get("domain_boost", {})
-        
-        logger.info(f"Initialized ConflictResolver with {len(self.official_sources)} official sources")
-
-    def resolve_conflict(self, existing_edge: Dict, new_edge: Dict) -> ResolutionResult:
-        """
-        Determine how to handle conflicting edges based on confidence, trust, and bias.
-        Returns a ResolutionResult with action and final confidence.
-        """
-        if self.conflict_policy == "store_disputed":
+    def resolve_conflict(self, existing_edge: Dict[str, Any], new_edge: Dict[str, Any]) -> ResolutionResult:
+        """Use LLM to decide how to handle conflicting facts."""
+        if not self.llm_resolution_agent:
+            logger.error("No LLM resolution agent provided!")
             return ResolutionResult(
-                action="store_disputed",
-                final_confidence=self._calculate_final_confidence(new_edge),
-                reason="Policy is set to store all disputed facts"
+                action="keep_existing", 
+                final_confidence=existing_edge.get("confidence", 0.5)
             )
 
-        # Calculate final confidence scores
-        existing_final_conf = self._calculate_final_confidence(existing_edge)
-        new_final_conf = self._calculate_final_confidence(new_edge)
-
-        # Check for official truth override
-        if existing_edge.get("official_truth"):
-            if not self._is_official_source(new_edge.get("source", "")):
-                return ResolutionResult(
-                    action="keep_existing",
-                    final_confidence=existing_final_conf,
-                    reason="Existing edge is marked as official truth"
-                )
-
-        # Compare final confidence scores with threshold
-        threshold = 1.2  # Require 20% higher confidence to overwrite
-        if new_final_conf > existing_final_conf * threshold:
-            return ResolutionResult(
-                action="overwrite",
-                final_confidence=new_final_conf,
-                reason=f"New confidence ({new_final_conf:.2f}) significantly higher than existing ({existing_final_conf:.2f})"
-            )
-        else:
-            return ResolutionResult(
-                action="keep_existing",
-                final_confidence=existing_final_conf,
-                reason=f"New confidence ({new_final_conf:.2f}) not significantly higher than existing ({existing_final_conf:.2f})"
-            )
-
-    def _calculate_final_confidence(self, edge: Dict) -> float:
-        """Calculate final confidence score incorporating all factors"""
-        # Start with base confidence
-        confidence = edge.get("confidence", 0.5)
-        source = edge.get("source", "").lower()
-
-        # Apply domain trust
-        confidence *= self._get_domain_trust(source)
-
-        # Apply bias overrides
-        confidence = self._apply_bias_overrides(source, confidence)
-
-        # Cap at 1.0 unless it's an official source
-        if not self._is_official_source(source):
-            confidence = min(confidence, 1.0)
-
-        return confidence
-
-    def _get_domain_trust(self, source: str) -> float:
-        """Get trust score for a domain"""
-        try:
-            domain = self._extract_domain(source)
-            
-            # Check each known domain pattern
-            for known_domain, trust_score in self.domain_trust_scores.items():
-                if known_domain in domain:
-                    return trust_score
-                    
-            return 0.5  # Default trust score
-            
-        except Exception as e:
-            logger.warning(f"Error processing domain trust for {source}: {e}")
-            return 0.5
-
-    def _apply_bias_overrides(self, source: str, confidence: float) -> float:
-        """Apply additional bias multipliers from configuration"""
-        try:
-            domain = self._extract_domain(source)
-            original_confidence = confidence
-
-            # Apply domain-specific boost
-            for boost_domain, multiplier in self.domain_boost.items():
-                if boost_domain in domain:
-                    confidence *= multiplier
-                    logger.info(
-                        f"Applied domain boost: {boost_domain} ({multiplier}x) "
-                        f"to {domain} ({original_confidence:.2f} -> {confidence:.2f})"
-                    )
-                    break  # Only apply highest boost
-
-            # Apply official source multiplier
-            if self._is_official_source(domain):
-                original_confidence = confidence
-                confidence *= 2.0
-                logger.info(
-                    f"Applied official source boost to {domain} "
-                    f"({original_confidence:.2f} -> {confidence:.2f})"
-                )
-
-            return confidence
-
-        except Exception as e:
-            logger.warning(f"Error applying bias overrides for {source}: {e}")
-            return confidence
-
-    def _is_official_source(self, source: str) -> bool:
-        """Check if source is in the official sources list"""
-        domain = self._extract_domain(source)
-        return any(off_source in domain for off_source in self.official_sources)
-
-    def _extract_domain(self, source: str) -> str:
-        """Extract domain from source URL or return source if not a URL"""
-        try:
-            parsed = urlparse(source)
-            if parsed.netloc:
-                return parsed.netloc.lower()
-            return source.lower()
-        except Exception:
-            return source.lower() 
+        # Get LLM's decision
+        result = self.llm_resolution_agent.resolve_conflict(existing_edge, new_edge)
+        
+        return ResolutionResult(
+            action=result.get("action", "keep_existing"),
+            final_confidence=result.get("final_confidence", 0.5),
+            reason=result.get("reason", "No reason given")
+        ) 
 
 
 ================================================================================
 File: C:\aishrink\modules\knowledge_graph\entity_extraction.py
 ================================================================================
 
-import spacy
-from typing import List, Dict, Any
 import logging
-from dataclasses import dataclass
-from collections import defaultdict
+from typing import List, Dict, Any
+from ..agents.entity_extraction_agent import EntityExtractionAgent
 
 logger = logging.getLogger(__name__)
 
-@dataclass
-class ExtractedFact:
-    entity1: str
-    relation: str
-    entity2: str
-    confidence: float
-    source: str
-
 class EntityExtractor:
     """
-    Extracts entities and relationships from text using spaCy NLP.
+    Extracts entities and relationships from text using LLM-based extraction.
     """
     
-    def __init__(self):
-        # Load English language model
-        try:
-            self.nlp = spacy.load("en_core_web_sm")
-            logger.info("Loaded spaCy model successfully")
-        except Exception as e:
-            logger.error(f"Failed to load spaCy model: {e}")
-            raise
-            
-        # Define relationship patterns
-        self.relation_patterns = [
-            {
-                "pattern": [{"POS": "PROPN"}, {"LEMMA": "acquire"}, {"POS": "PROPN"}],
-                "relation": "acquired"
-            },
-            {
-                "pattern": [{"POS": "PROPN"}, {"LEMMA": "invest"}, {"LOWER": "in"}, {"POS": "PROPN"}],
-                "relation": "invested_in"
-            },
-            {
-                "pattern": [{"POS": "PROPN"}, {"LEMMA": "be"}, {"POS": "DET"}, {"POS": "NOUN"}, {"LOWER": "of"}, {"POS": "PROPN"}],
-                "relation": "part_of"
-            }
-            # Add more patterns as needed
-        ]
-        
-        # Add patterns to matcher
-        self.matcher = spacy.matcher.Matcher(self.nlp.vocab)
-        for i, pattern in enumerate(self.relation_patterns):
-            self.matcher.add(f"pattern_{i}", [pattern["pattern"]])
+    def __init__(self, model_path: str = None):
+        self.extraction_agent = EntityExtractionAgent(model_path=model_path)
+        logger.info("EntityExtractor initialized with LLM agent")
 
     def extract_entities(self, text: str, source: str = "unknown") -> List[Dict[str, Any]]:
         """
-        Extract entity relationships from text.
+        Extract entity relationships from text using LLM.
         Returns list of dicts with {entity1, relation, entity2, confidence, source}
         """
         try:
-            # Process text with spaCy
-            doc = self.nlp(text)
-            
-            # Extract facts using different methods
-            facts = []
-            facts.extend(self._extract_from_patterns(doc, source))
-            facts.extend(self._extract_from_dependencies(doc, source))
-            
+            facts = self.extraction_agent.extract_entities(text, source)
+            logger.debug(f"Extracted {len(facts)} facts from text")
             return facts
             
         except Exception as e:
             logger.error(f"Error extracting entities: {e}")
-            return []
-
-    def _extract_from_patterns(self, doc, source: str) -> List[Dict[str, Any]]:
-        """Extract facts using predefined patterns"""
-        facts = []
-        matches = self.matcher(doc)
-        
-        for match_id, start, end in matches:
-            pattern_name = self.nlp.vocab.strings[match_id]
-            pattern_index = int(pattern_name.split("_")[1])
-            relation = self.relation_patterns[pattern_index]["relation"]
-            
-            span = doc[start:end]
-            entities = [token for token in span if token.pos_ == "PROPN"]
-            
-            if len(entities) >= 2:
-                facts.append({
-                    "entity1": entities[0].text,
-                    "relation": relation,
-                    "entity2": entities[-1].text,
-                    "confidence": 0.8,  # Pattern-based confidence
-                    "source": source
-                })
-        
-        return facts
-
-    def _extract_from_dependencies(self, doc, source: str) -> List[Dict[str, Any]]:
-        """Extract facts using dependency parsing"""
-        facts = []
-        
-        for token in doc:
-            # Look for subject-verb-object patterns
-            if token.dep_ == "nsubj" and token.head.pos_ == "VERB":
-                subject = token
-                verb = token.head
-                
-                # Find object
-                for child in verb.children:
-                    if child.dep_ in ["dobj", "pobj"]:
-                        # Only consider named entities
-                        if subject.ent_type_ and child.ent_type_:
-                            facts.append({
-                                "entity1": subject.text,
-                                "relation": verb.lemma_,
-                                "entity2": child.text,
-                                "confidence": 0.6,  # Dependency-based confidence
-                                "source": source
-                            })
-        
-        return facts
-
-    def _clean_entity(self, text: str) -> str:
-        """Clean and normalize entity text"""
-        return text.strip()
-
-    def _get_relation_confidence(self, relation: str, context_size: int) -> float:
-        """
-        Calculate confidence score for a relation based on various factors
-        """
-        # Base confidence
-        confidence = 0.5
-        
-        # Adjust based on context size
-        if context_size > 100:
-            confidence += 0.2
-            
-        # Adjust based on relation type
-        if relation in ["acquired", "invested_in", "part_of"]:
-            confidence += 0.2
-            
-        return min(confidence, 1.0) 
+            return [] 
 
 
 ================================================================================
@@ -2293,11 +3461,13 @@ from ..monitoring.metrics import (
 )
 from .shard_manager import ShardManager
 from ..messaging.message_bus import MessageBus
+from ..agents.llm_agent import BaseLLMAgent
+from .reasoning_engine import ReasoningEngine
 
 logger = logging.getLogger(__name__)
 
 class KnowledgeGraphManager:
-    """Manages interactions with the Neo4j knowledge graph database"""
+    """Manages Neo4j knowledge graph with LLM-based conflict resolution."""
     
     def __init__(self, config):
         self.config = config
@@ -2310,7 +3480,7 @@ class KnowledgeGraphManager:
                 self.uri, 
                 auth=(self.user, self.password)
             )
-            logger.info("Successfully connected to Neo4j database")
+            logger.info("Connected to Neo4j")
         except Exception as e:
             logger.error(f"Failed to connect to Neo4j: {e}")
             raise
@@ -2321,40 +3491,14 @@ class KnowledgeGraphManager:
         # Subscribe to cross-shard updates
         self.message_bus.subscribe("kg_updates", self._handle_remote_update)
 
-    def insert_relationships(self, facts: List[Dict[str, Any]], conflict_resolver) -> None:
-        """Insert relationships, handling sharding"""
-        local_facts = []
-        remote_facts = {}
+        # Add reasoning engine
+        self.reasoning_engine = ReasoningEngine()
         
-        # Sort facts by shard
-        for fact in facts:
-            entity1 = fact["entity1"]
-            entity2 = fact["entity2"]
-            
-            # If either entity belongs to another shard, queue for forwarding
-            shard1 = self.shard_manager.get_shard_for_entity(entity1)
-            shard2 = self.shard_manager.get_shard_for_entity(entity2)
-            
-            if shard1.node_id != self.shard_manager.node_id:
-                remote_facts.setdefault(shard1.node_id, []).append(fact)
-            elif shard2.node_id != self.shard_manager.node_id:
-                remote_facts.setdefault(shard2.node_id, []).append(fact)
-            else:
-                local_facts.append(fact)
-        
-        # Process local facts
-        if local_facts:
-            self._process_local_facts(local_facts, conflict_resolver)
-        
-        # Forward remote facts
-        for node_id, node_facts in remote_facts.items():
-            self.message_bus.publish("kg_updates", {
-                "target_node": node_id,
-                "facts": node_facts
-            })
+        # Start inference tasks
+        self._start_inference_tasks()
 
-    def _process_local_facts(self, facts: List[Dict], conflict_resolver) -> None:
-        """Process facts that belong to this shard"""
+    def insert_relationships(self, facts: List[Dict[str, Any]], conflict_resolver):
+        """Insert facts into graph, using LLM for conflict resolution."""
         with self.driver.session() as session:
             for fact in facts:
                 try:
@@ -2362,8 +3506,8 @@ class KnowledgeGraphManager:
                 except Exception as e:
                     logger.error(f"Error processing fact {fact}: {e}")
 
-    def _process_fact(self, session, fact: Dict[str, Any], conflict_resolver) -> None:
-        """Process a single fact, handling conflicts"""
+    def _process_fact(self, session, fact: Dict[str, Any], conflict_resolver):
+        """Process a single fact, handling conflicts with LLM."""
         entity1 = fact["entity1"]
         relation = fact["relation"]
         entity2 = fact["entity2"]
@@ -2372,105 +3516,93 @@ class KnowledgeGraphManager:
 
         # Check for existing relationship
         existing = session.run(
-            """
-            MATCH (a:Entity {name: $e1})-[r:`%s`]->(b:Entity {name: $e2})
+            f"""
+            MATCH (a:Entity {{name: $e1}})-[r:`{relation}`]->(b:Entity {{name: $e2}})
             RETURN r
-            """ % relation,
+            """,
             e1=entity1, e2=entity2
         ).single()
 
         if existing and existing["r"]:
-            # Handle conflict
-            resolution = conflict_resolver.resolve_conflict(
-                existing_edge={
-                    "confidence": existing["r"]["confidence"],
-                    "source": existing["r"].get("source", "unknown"),
-                    "official_truth": existing["r"].get("official_truth", False)
-                },
-                new_edge={
-                    "confidence": confidence,
-                    "source": source
-                }
-            )
+            # Handle conflict with LLM
+            existing_edge = {
+                "confidence": existing["r"]["confidence"],
+                "source": existing["r"].get("source", "unknown"),
+                "official_truth": existing["r"].get("official_truth", False)
+            }
+            new_edge = {
+                "confidence": confidence,
+                "source": source
+            }
 
+            resolution = conflict_resolver.resolve_conflict(existing_edge, new_edge)
+            
             if resolution.action == "overwrite":
                 self._update_relationship(
-                    session, 
-                    entity1, 
-                    relation, 
-                    entity2, 
-                    resolution.final_confidence, 
-                    source,
-                    resolution.reason
+                    session, entity1, relation, entity2,
+                    resolution.final_confidence, source, resolution.reason
                 )
+                RELATIONSHIPS_CREATED.inc()
+                
             elif resolution.action == "store_disputed":
                 self._store_disputed_relationship(
-                    session,
-                    entity1,
-                    relation,
-                    entity2,
-                    resolution.final_confidence,
-                    source,
-                    resolution.reason
+                    session, entity1, relation, entity2,
+                    resolution.final_confidence, source, resolution.reason
                 )
+                RELATIONSHIPS_CREATED.inc()
+                
+            CONFLICTS_RESOLVED.labels(resolution_type=resolution.action).inc()
+            TRUTH_CONFIDENCE.observe(resolution.final_confidence)
+            
         else:
             # Create new relationship
             self._create_relationship(session, entity1, relation, entity2, confidence, source)
-
-        CONFLICTS_RESOLVED.labels(
-            resolution_type=resolution.action
-        ).inc()
-        
-        if resolution.action in ["overwrite", "store_disputed"]:
             RELATIONSHIPS_CREATED.inc()
-            TRUTH_CONFIDENCE.observe(resolution.final_confidence)
 
-    def _create_relationship(self, session, entity1: str, relation: str, entity2: str, 
-                           confidence: float, source: str) -> None:
-        """Create a new relationship between entities"""
+    def _create_relationship(self, session, e1: str, rel: str, e2: str, conf: float, source: str):
+        """Create a new relationship."""
         session.run(
-            """
-            MERGE (a:Entity {name: $e1})
-            MERGE (b:Entity {name: $e2})
-            CREATE (a)-[r:`%s` {
+            f"""
+            MERGE (a:Entity {{name: $e1}})
+            MERGE (b:Entity {{name: $e2}})
+            CREATE (a)-[r:`{rel}` {{
                 confidence: $conf,
                 source: $source,
-                timestamp: timestamp()
-            }]->(b)
-            """ % relation,
-            e1=entity1, e2=entity2, conf=confidence, source=source
+                created_at: timestamp()
+            }}]->(b)
+            """,
+            e1=e1, e2=e2, conf=conf, source=source
         )
 
-    def _update_relationship(self, session, entity1: str, relation: str, entity2: str,
-                           confidence: float, source: str, reason: str = "") -> None:
-        """Update an existing relationship with new confidence and metadata"""
+    def _update_relationship(self, session, e1: str, rel: str, e2: str, conf: float, 
+                           source: str, reason: str = ""):
+        """Update an existing relationship."""
         session.run(
-            """
-            MATCH (a:Entity {name: $e1})-[r:`%s`]->(b:Entity {name: $e2})
+            f"""
+            MATCH (a:Entity {{name: $e1}})-[r:`{rel}`]->(b:Entity {{name: $e2}})
             SET r.confidence = $conf,
-                r.truth_confidence = $conf,
                 r.source = $source,
                 r.update_reason = $reason,
                 r.updated_at = timestamp()
-            """ % relation,
-            e1=entity1, e2=entity2, conf=confidence, source=source, reason=reason
+            """,
+            e1=e1, e2=e2, conf=conf, source=source, reason=reason
         )
 
-    def _store_disputed_relationship(self, session, entity1: str, relation: str, entity2: str,
-                                   confidence: float, source: str, reason: str = "") -> None:
-        """Store a disputed version of a relationship with metadata"""
+    def _store_disputed_relationship(self, session, e1: str, rel: str, e2: str, conf: float,
+                                   source: str, reason: str = ""):
+        """Store a disputed version of a relationship."""
         session.run(
-            """
-            MATCH (a:Entity {name: $e1}), (b:Entity {name: $e2})
-            CREATE (a)-[r:`%s` {
+            f"""
+            MATCH (a:Entity {{name: $e1}}), (b:Entity {{name: $e2}})
+            CREATE (a)-[r:`{rel}` {{
                 confidence: $conf,
                 source: $source,
                 disputed: true,
-                update_reason: $reason,
-                timestamp: timestamp()
-            }]->(b)
-            """ % relation,
-            e1=entity1, e2=entity2, conf=confidence, source=source, reason=reason
+                dispute_reason: $reason,
+                created_at: timestamp()
+            }}]->(b)
+            """,
+            e1=e1, e2=e2, conf=conf, source=source, reason=reason
         )
 
     def mark_as_official_truth(self, entity1: str, relation: str, entity2: str, admin_id: str) -> bool:
@@ -2493,7 +3625,7 @@ class KnowledgeGraphManager:
             return False
 
     def close(self):
-        """Close the database connection"""
+        """Close the database connection."""
         self.driver.close()
 
     def _handle_remote_update(self, message: Dict):
@@ -2504,6 +3636,530 @@ class KnowledgeGraphManager:
         facts = message.get("facts", [])
         if facts:
             self.insert_relationships(facts, self.conflict_resolver) 
+
+    def _start_inference_tasks(self):
+        """Start background task for updates."""
+        import asyncio
+        asyncio.create_task(self._inference_loop())
+
+    async def _inference_loop(self):
+        """Periodically check for and apply updates."""
+        while True:
+            try:
+                # Get relevant facts
+                with self.driver.session() as session:
+                    facts = session.run("""
+                        MATCH (a:Entity)-[r]->(b:Entity)
+                        WHERE r.metadata IS NOT NULL
+                        RETURN a.name as entity1, type(r) as relation,
+                               b.name as entity2, r.metadata as metadata
+                    """)
+                    
+                    fact_list = list(facts)
+                    
+                    # Get new inferences
+                    inferences = self.reasoning_engine.infer_new_knowledge(
+                        fact_list,
+                        reasoning_types=["temporal", "causal", "logical", "taxonomic"]
+                    )
+                    
+                    for inference in inferences:
+                        # Validate inference
+                        if self.reasoning_engine.validate_inference(inference):
+                            # Apply the inference
+                            self._apply_inference(
+                                session,
+                                inference["inferred_fact"],
+                                inference["confidence"],
+                                f"Inferred via {inference['reasoning_type']} reasoning: {inference['proof']}"
+                            )
+                
+                await asyncio.sleep(3600)  # Check hourly
+                
+            except Exception as e:
+                logger.error(f"Error in inference loop: {e}")
+                await asyncio.sleep(3600)
+
+    def _apply_inference(self, session, fact, confidence, reason):
+        """Apply an inferred update to the graph."""
+        try:
+            session.run(
+                f"""
+                MERGE (a:Entity {{name: $e1}})
+                MERGE (b:Entity {{name: $e2}})
+                CREATE (a)-[r:`{fact['relation']}` {{
+                    confidence: $conf,
+                    source: "inference",
+                    inference_reason: $reason,
+                    inferred_at: timestamp()
+                }}]->(b)
+                """,
+                e1=fact["entity1"],
+                e2=fact["entity2"],
+                conf=confidence,
+                reason=reason
+            )
+            logger.info(f"Applied inference: {fact['entity1']}->{fact['entity2']}")
+        except Exception as e:
+            logger.error(f"Error applying inference: {e}")
+
+class KnowledgeGraphAgent(BaseLLMAgent):
+    """Agent for managing knowledge graph operations using ASF framework."""
+    
+    def validate_update(self, operation: Dict[str, Any]) -> Dict[str, Any]:
+        """Validate and enrich graph updates using Agent-Specific Framework."""
+        prompt = self._format_agent_prompt(
+            role="""You are the Chief Knowledge Graph Validator responsible for 
+maintaining data quality and consistency.""",
+            objective="""Validate and enrich proposed knowledge graph updates before 
+they are committed to ensure data quality and consistency.""",
+            context="""Our knowledge graph represents real-world facts with high confidence.
+Updates must be carefully validated to maintain trust and accuracy.
+Ground truth takes precedence over new information unless compelling evidence exists.""",
+            sop=f"""Analyze this proposed graph update:
+{operation}
+
+Follow these steps:
+1. Verify entity normalization
+   - Check entity names are standardized
+   - Resolve any ambiguous references
+   
+2. Validate relationship semantics
+   - Confirm relationship type is valid
+   - Check for logical consistency
+   
+3. Assess confidence scoring
+   - Review confidence calculation
+   - Adjust if needed based on evidence
+   
+4. Check for conflicts
+   - Identify potential contradictions
+   - Flag for human review if critical
+
+5. Enrich metadata
+   - Add relevant timestamps
+   - Include validation notes""",
+            tools_available="""Available Tools:
+- Entity Resolution API
+- Temporal Reasoning Engine
+- Confidence Scoring Model
+- Conflict Detection System""",
+            constraints="""Constraints:
+- Must maintain backwards compatibility
+- Cannot override admin-marked ground truth
+- Must preserve audit trail
+- Must handle edge cases gracefully"""
+        )
+        
+        response = self._call_llm(prompt, temperature=0.2)
+        
+        try:
+            import json
+            result = json.loads(response)
+            return {
+                "valid": result.get("valid", False),
+                "enriched_operation": result.get("enriched_operation", operation),
+                "validation_notes": result.get("validation_notes", []),
+                "confidence_adjustment": result.get("confidence_adjustment", 0.0)
+            }
+        except Exception as e:
+            logger.error(f"Error in graph validation: {e}")
+            return {
+                "valid": False,
+                "enriched_operation": operation,
+                "validation_notes": ["Failed to validate due to error"],
+                "confidence_adjustment": -0.2
+            }
+
+    def _format_agent_prompt(self, role: str, objective: str, context: str, 
+                           sop: str, tools_available: str, constraints: str) -> str:
+        """Format prompt using Agent-Specific Framework from paper."""
+        return f"""# Role
+{role}
+
+# Objective
+{objective}
+
+# Context
+{context}
+
+# Standard Operating Procedure
+{sop}
+
+# Available Tools
+{tools_available}
+
+# Constraints
+{constraints}
+
+Response (in JSON):""" 
+
+
+================================================================================
+File: C:\aishrink\modules\knowledge_graph\ground_truth_agent.py
+================================================================================
+
+from typing import Dict, Any, List
+from ..agents.llm_agent import BaseLLMAgent
+import logging
+
+logger = logging.getLogger(__name__)
+
+class GroundTruthAgent(BaseLLMAgent):
+    """Specialized agent for managing ground truth in knowledge graph."""
+    
+    def evaluate_ground_truth_candidate(self, fact: Dict[str, Any], 
+                                      evidence: List[Dict[str, Any]]) -> Dict[str, Any]:
+        """Evaluate if a fact should be marked as ground truth."""
+        prompt = self._format_long_prompt(
+            role="""You are the Ground Truth Authority responsible for maintaining 
+absolute truth in the knowledge graph.""",
+            objective="""Evaluate whether a proposed fact meets the strict criteria 
+to be marked as ground truth.""",
+            context="""Ground truth represents facts that are considered absolutely true 
+and take precedence over conflicting information. This designation requires 
+extensive evidence and careful consideration.""",
+            instructions=f"""Evaluate this fact for ground truth status:
+
+Proposed Fact:
+{fact}
+
+Supporting Evidence:
+{evidence}
+
+Evaluate based on:
+1. Evidence Quality
+   - Source reliability
+   - Verification status
+   - Corroboration level
+
+2. Fact Properties
+   - Clarity and specificity
+   - Temporal stability
+   - Logical consistency
+
+3. Confidence Assessment
+   - Evidence strength
+   - Verification level
+   - Expert consensus
+
+Respond in JSON format with:
+- mark_as_ground_truth: boolean
+- confidence_score: float
+- reasoning: string
+- verification_notes: string[]
+- required_additional_evidence: string[]""",
+            examples=[{
+                "input": "Fact: Google acquired YouTube in 2006",
+                "output": '{"mark_as_ground_truth": true, "confidence_score": 1.0, "reasoning": "Multiple reliable sources, official documentation, consistent historical record"}'
+            }]
+        )
+        
+        response = self._call_llm(prompt, temperature=0.1)  # Very low temp for consistency
+        
+        try:
+            import json
+            return json.loads(response)
+        except Exception as e:
+            logger.error(f"Error evaluating ground truth: {e}")
+            return {
+                "mark_as_ground_truth": False,
+                "confidence_score": 0.0,
+                "reasoning": "Failed to evaluate due to error",
+                "verification_notes": ["Evaluation failed"],
+                "required_additional_evidence": ["Complete re-evaluation required"]
+            } 
+
+
+================================================================================
+File: C:\aishrink\modules\knowledge_graph\reasoning_engine.py
+================================================================================
+
+from typing import Dict, Any, List
+from datetime import datetime
+from ..agents.llm_agent import BaseLLMAgent
+import logging
+
+logger = logging.getLogger(__name__)
+
+class ReasoningEngine(BaseLLMAgent):
+    """Advanced reasoning engine for quantum-accelerated knowledge inference."""
+    
+    REASONING_TYPES = {
+        "temporal": {
+            "confidence_threshold": 0.97,
+            "description": "Time-based reasoning (ages, durations, sequences)"
+        },
+        "causal": {
+            "confidence_threshold": 0.98,
+            "description": "Cause-effect relationships and implications"
+        },
+        "spatial": {
+            "confidence_threshold": 0.95,
+            "description": "Location-based and geometric reasoning"
+        },
+        "mathematical": {
+            "confidence_threshold": 0.999,
+            "description": "Numerical calculations and derivations"
+        },
+        "logical": {
+            "confidence_threshold": 0.98,
+            "description": "Deductive and inductive reasoning"
+        },
+        "taxonomic": {
+            "confidence_threshold": 0.95,
+            "description": "Classification and categorization relationships"
+        },
+        # New advanced reasoning types
+        "quantum_probabilistic": {
+            "confidence_threshold": 0.95,
+            "description": "Quantum probability-based inference across multiple possible states"
+        },
+        "network_topology": {
+            "confidence_threshold": 0.96,
+            "description": "Graph structure analysis for emergent patterns and relationships"
+        },
+        "multiverse_temporal": {
+            "confidence_threshold": 0.97,
+            "description": "Parallel timeline analysis for predictive modeling"
+        },
+        "entropic": {
+            "confidence_threshold": 0.98,
+            "description": "Information theory based relationship evolution"
+        },
+        "emergent_pattern": {
+            "confidence_threshold": 0.96,
+            "description": "Complex system pattern recognition and prediction"
+        },
+        "counterfactual": {
+            "confidence_threshold": 0.97,
+            "description": "Alternative scenario analysis and implication mapping"
+        },
+        "recursive_deep": {
+            "confidence_threshold": 0.98,
+            "description": "Deep recursive relationship exploration"
+        },
+        "quantum_entangled": {
+            "confidence_threshold": 0.99,
+            "description": "Identifying deeply interconnected fact networks"
+        },
+        "holographic": {
+            "confidence_threshold": 0.97,
+            "description": "Part-whole relationship inference across scales"
+        },
+        "metamorphic": {
+            "confidence_threshold": 0.96,
+            "description": "State transition and transformation patterns"
+        }
+    }
+
+    def infer_new_knowledge(self, facts: List[Dict[str, Any]], 
+                          reasoning_types: List[str] = None) -> List[Dict[str, Any]]:
+        """Infer new facts using quantum-accelerated reasoning."""
+        if reasoning_types is None:
+            reasoning_types = list(self.REASONING_TYPES.keys())
+
+        prompt = self._format_long_prompt(
+            role="You are a Quantum-Enhanced Reasoning Expert capable of advanced inference.",
+            objective="Analyze existing facts to infer new knowledge using quantum computing capabilities.",
+            context=f"""Current reasoning types enabled: {reasoning_types}
+Using quantum computing power (>1 quadrillion calculations/second) for deep inference.
+Each reasoning type has strict confidence requirements and must be logically sound.""",
+            instructions=f"""Analyze these facts for new inferences:
+
+Facts: {facts}
+
+Available Reasoning Types:
+{self._format_reasoning_types(reasoning_types)}
+
+For each potential inference, consider:
+
+1. Quantum Probabilistic Analysis
+   - Superposition of potential states
+   - Quantum probability distributions
+   - Interference patterns in fact networks
+
+2. Network Topology Analysis
+   - Graph structure patterns
+   - Centrality and importance measures
+   - Community detection
+   - Flow and connectivity patterns
+
+3. Multiverse Temporal Analysis
+   - Parallel timeline projections
+   - Temporal branch points
+   - Convergent outcomes
+   - Timeline stability analysis
+
+4. Entropic Pattern Recognition
+   - Information flow analysis
+   - Entropy gradients in knowledge
+   - Statistical mechanics of facts
+   - Phase transitions in knowledge states
+
+5. Emergent Pattern Detection
+   - Complex system behaviors
+   - Self-organizing principles
+   - Emergence indicators
+   - Pattern stability analysis
+
+6. Counterfactual Reasoning
+   - Alternative scenario modeling
+   - Causal intervention analysis
+   - Possibility space mapping
+   - Stability under perturbation
+
+7. Recursive Deep Analysis
+   - Multi-level relationship chains
+   - Recursive pattern detection
+   - Deep structure mapping
+   - Hierarchical implications
+
+8. Quantum Entanglement Mapping
+   - Fact interdependence networks
+   - Correlation strength analysis
+   - Entanglement patterns
+   - Non-local relationships
+
+9. Holographic Inference
+   - Scale-invariant patterns
+   - Whole-part relationships
+   - Fractal knowledge structures
+   - Information preservation
+
+10. Metamorphic Analysis
+    - State transition networks
+    - Transformation patterns
+    - Phase space mapping
+    - Stability analysis
+
+Rules:
+- Leverage quantum computing for parallel analysis
+- Each inference must meet its type's confidence threshold
+- Must provide clear logical proof
+- Must specify reasoning type(s) used
+- Must handle uncertainty explicitly
+- Consider cross-reasoning-type interactions
+
+Output Format:
+Return a JSON array of inferences, each containing:
+- original_facts: List of source facts used
+- inferred_fact: The new fact derived
+- reasoning_types: List of reasoning types used
+- confidence: Float (must exceed type's threshold)
+- proof: Detailed logical proof
+- quantum_analysis: Details of quantum computation used
+- assumptions: List of any assumptions made
+- stability_score: Float indicating inference stability
+- cross_validation: List of validation methods used""",
+            examples=[
+                {
+                    "input": """Facts: [
+                        {"entity1": "CompanyA", "relation": "developing", "entity2": "QuantumTech"},
+                        {"entity1": "CompanyB", "relation": "researching", "entity2": "QuantumTech"},
+                        {"entity1": "Market", "relation": "trending", "entity2": "QuantumComputing"}
+                    ]""",
+                    "output": """{
+                        "inferences": [{
+                            "original_facts": ["CompanyA->developing->QuantumTech", "CompanyB->researching->QuantumTech"],
+                            "inferred_fact": {"entity1": "CompanyA", "relation": "likely_to_partner", "entity2": "CompanyB"},
+                            "reasoning_types": ["quantum_probabilistic", "network_topology", "emergent_pattern"],
+                            "confidence": 0.98,
+                            "proof": "Quantum analysis of market patterns and research overlap indicates high partnership probability",
+                            "quantum_analysis": "Parallel state analysis of 1M+ potential futures shows 98% convergence",
+                            "assumptions": ["Companies in same quantum tech space", "Market conditions favor collaboration"],
+                            "stability_score": 0.95,
+                            "cross_validation": ["Pattern matching", "Historical precedent", "Market dynamics"]
+                        }]
+                    }"""
+                }
+            ]
+        )
+
+        response = self._call_llm(prompt, temperature=0.2)
+        
+        try:
+            import json
+            result = json.loads(response)
+            inferences = result.get("inferences", [])
+            
+            # Filter by confidence thresholds
+            valid_inferences = []
+            for inference in inferences:
+                reasoning_type = inference.get("reasoning_type")
+                if reasoning_type in self.REASONING_TYPES:
+                    threshold = self.REASONING_TYPES[reasoning_type]["confidence_threshold"]
+                    if inference.get("confidence", 0) >= threshold:
+                        valid_inferences.append(inference)
+            
+            return valid_inferences
+            
+        except Exception as e:
+            logger.error(f"Error processing inferences: {e}")
+            return []
+
+    def validate_inference(self, inference: Dict[str, Any]) -> bool:
+        """Validate an inference using strict logical verification."""
+        prompt = self._format_long_prompt(
+            role="You are a Logical Inference Validator.",
+            objective="Verify that an inference is logically sound and meets confidence requirements.",
+            context="""We must validate inferences with absolute logical certainty.
+Each type of reasoning has specific requirements and confidence thresholds.""",
+            instructions=f"""Validate this inference:
+
+Inference: {inference}
+
+Verification Steps:
+1. Logic Verification
+   - Check reasoning chain
+   - Verify all logical steps
+   - Validate assumptions
+
+2. Confidence Assessment
+   - Verify confidence calculation
+   - Check against threshold
+   - Assess uncertainty factors
+
+3. Edge Case Analysis
+   - Identify potential counterexamples
+   - Check boundary conditions
+   - Consider exceptions
+
+4. Domain Constraints
+   - Check domain-specific rules
+   - Verify real-world applicability
+   - Validate context assumptions
+
+Respond with:
+- valid: boolean
+- verification_score: float
+- verification_notes: string[]
+- potential_issues: string[]""",
+            examples=[{
+                "input": "Logical inference: If A contains B, and B contains C, then A contains C",
+                "output": '{"valid": true, "verification_score": 1.0, "verification_notes": ["Transitive property of containment verified"], "potential_issues": []}'
+            }]
+        )
+        
+        response = self._call_llm(prompt, temperature=0.1)
+        
+        try:
+            result = json.loads(response)
+            return result.get("valid", False) and result.get("verification_score", 0) > 0.95
+        except Exception as e:
+            logger.error(f"Error validating inference: {e}")
+            return False
+
+    def _format_reasoning_types(self, enabled_types: List[str]) -> str:
+        """Format reasoning types info for prompt."""
+        output = []
+        for rtype in enabled_types:
+            if rtype in self.REASONING_TYPES:
+                info = self.REASONING_TYPES[rtype]
+                output.append(f"""- {rtype.title()} Reasoning:
+  Description: {info['description']}
+  Confidence Required: {info['confidence_threshold']}""")
+        return "\n".join(output) 
 
 
 ================================================================================
@@ -2600,6 +4256,160 @@ class ShardManager:
         """Get information about other shards"""
         return [shard for shard in self.shard_map.values() 
                 if shard.node_id != self.node_id] 
+
+
+================================================================================
+File: C:\aishrink\modules\knowledge_graph\temporal_reasoning_agent.py
+================================================================================
+
+from typing import Dict, Any, List
+from datetime import datetime
+from ..agents.llm_agent import BaseLLMAgent
+import logging
+
+logger = logging.getLogger(__name__)
+
+class TemporalReasoningAgent(BaseLLMAgent):
+    """Agent for temporal reasoning and high-confidence edge case inference."""
+    
+    def infer_temporal_updates(self, fact: Dict[str, Any], current_time: datetime = None) -> List[Dict[str, Any]]:
+        """Infer temporal updates (e.g., age changes) from existing facts."""
+        if current_time is None:
+            current_time = datetime.now()
+
+        prompt = self._format_long_prompt(
+            role="""You are a Temporal Reasoning Expert with the ability to infer 
+high-confidence updates based on the passage of time.""",
+            objective="""Analyze facts and identify any high-confidence temporal updates 
+that should be made based on the current time.""",
+            context=f"""Current time: {current_time.isoformat()}
+We need to identify any facts that can be updated with extremely high confidence 
+based on the passage of time alone. Only suggest updates when confidence exceeds 97%.""",
+            instructions=f"""Analyze this fact for temporal implications:
+
+Fact: {fact}
+
+Consider:
+1. Age Progression
+   - Birth dates -> current age
+   - Time-based statuses (e.g., employment duration)
+   - Project/event completion status
+
+2. Time-Based State Changes
+   - Event transitions (scheduled -> ongoing -> completed)
+   - Status changes based on known deadlines
+   - Lifecycle progressions
+
+3. Temporal Relationships
+   - Duration calculations
+   - Sequential dependencies
+   - Periodic updates
+
+Rules:
+- Only suggest updates with >97% confidence
+- Must be based purely on temporal logic
+- Must preserve fact provenance
+- Include confidence calculation explanation
+
+Output Format:
+Return a JSON array of suggested updates, each containing:
+- original_fact: The source fact
+- updated_fact: The new version
+- confidence: Float (must be >0.97)
+- reasoning: Detailed explanation
+- temporal_logic: Mathematical/logical proof""",
+            examples=[
+                {
+                    "input": """Fact: {
+                        "entity1": "John Smith",
+                        "relation": "hasAge",
+                        "entity2": "25",
+                        "metadata": {
+                            "birth_date": "1998-03-15"
+                        }
+                    }""",
+                    "output": """{
+                        "updates": [{
+                            "original_fact": {"entity1": "John Smith", "relation": "hasAge", "entity2": "25"},
+                            "updated_fact": {"entity1": "John Smith", "relation": "hasAge", "entity2": "26"},
+                            "confidence": 0.9999,
+                            "reasoning": "Based on birth date and current date, age can be calculated exactly",
+                            "temporal_logic": "2024 - 1998 = 26 years (accounting for birth month)"
+                        }]
+                    }"""
+                }
+            ]
+        )
+        
+        response = self._call_llm(prompt, temperature=0.1)  # Very low temp for precision
+        
+        try:
+            import json
+            result = json.loads(response)
+            updates = result.get("updates", [])
+            
+            # Filter for only very high confidence updates
+            high_confidence_updates = [
+                update for update in updates 
+                if update.get("confidence", 0) > 0.97
+            ]
+            
+            return high_confidence_updates
+            
+        except Exception as e:
+            logger.error(f"Error processing temporal updates: {e}")
+            return []
+
+    def validate_temporal_inference(self, original_fact: Dict[str, Any], 
+                                  inferred_fact: Dict[str, Any]) -> bool:
+        """Double-check temporal inference with strict logical validation."""
+        prompt = self._format_long_prompt(
+            role="You are a Temporal Logic Validator.",
+            objective="Verify that a temporal inference is logically sound.",
+            context="""We must validate temporal inferences with absolute logical certainty.
+Only approve inferences that can be mathematically proven.""",
+            instructions=f"""Validate this temporal inference:
+
+Original Fact:
+{original_fact}
+
+Inferred Fact:
+{inferred_fact}
+
+Verification Steps:
+1. Check temporal logic
+   - Verify all calculations
+   - Confirm logical steps
+   - Validate assumptions
+
+2. Edge Case Analysis
+   - Check for leap years
+   - Verify timezone implications
+   - Consider calendar edge cases
+
+3. Logical Proof
+   - Provide step-by-step proof
+   - Identify any assumptions
+   - Verify completeness
+
+Respond with:
+- valid: boolean (true only if mathematically certain)
+- proof: string (mathematical proof)
+- edge_cases_considered: string[]""",
+            examples=[{
+                "input": "Age inference: 2024-01-01 birth date -> age 1 on 2025-01-01",
+                "output": '{"valid": true, "proof": "1. Current date - birth date = 1 year exactly", "edge_cases_considered": ["leap year 2024", "timezone rollover"]}'
+            }]
+        )
+        
+        response = self._call_llm(prompt, temperature=0.1)
+        
+        try:
+            result = json.loads(response)
+            return result.get("valid", False)
+        except Exception as e:
+            logger.error(f"Error validating temporal inference: {e}")
+            return False 
 
 
 ================================================================================

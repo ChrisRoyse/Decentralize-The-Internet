@@ -23,6 +23,9 @@ from modules.config.config_loader import ConfigLoader
 from modules.monitoring.metrics_server import MetricsServer
 from modules.logging.log_config import configure_logging
 
+# Import new LLM components
+from modules.agents.llm_orchestrator import LLMOrchestrator
+
 # Configure logging
 logger = configure_logging()
 
@@ -53,7 +56,10 @@ class DecentralizedPipeline:
                             node_id=self.config["node"]["id"],
                             role=self.config["node"]["role"])
             
-            # Initialize security components first
+            # Initialize LLM orchestrator first
+            self.llm_orchestrator = LLMOrchestrator()
+            
+            # Initialize security components
             self.components["encryption"] = EncryptionManager(self.config)
             self.components["access_control"] = AccessControl(self.config)
             
@@ -64,17 +70,19 @@ class DecentralizedPipeline:
                 self.components["message_bus"]
             )
             
-            # Initialize knowledge graph components
+            # Initialize knowledge graph components with LLM resolution
             self.components["graph_manager"] = KnowledgeGraphManager(self.config)
-            self.components["entity_extractor"] = EntityExtractor()
-            self.components["conflict_resolver"] = ConflictResolver(self.config)
+            self.components["entity_extractor"] = EntityExtractor(
+                model_path=self.llm_orchestrator.model_path
+            )
+            self.components["conflict_resolver"] = ConflictResolver(
+                self.config,
+                llm_resolution_agent=self.llm_orchestrator.resolver
+            )
             
             # Initialize ingestion components
-            self.components["embedding_model"] = EmbeddingModel()
-            self.components["dedup_manager"] = DeduplicationManager(
-                self.config,
-                self.components["embedding_model"]
-            )
+            self.components["dedup_manager"] = DeduplicationManager(self.config)
+            self.components["compressor"] = Compressor()
             
             # Initialize crawler components
             self.components["frontier_manager"] = FrontierManager(
@@ -82,16 +90,18 @@ class DecentralizedPipeline:
                 self.components["message_bus"]
             )
             
+            # Initialize crawler with LLM orchestrator
             self.components["crawler"] = CrawlerAgent(
                 config=self.config,
                 frontier_manager=self.components["frontier_manager"],
                 deduper=self.components["dedup_manager"],
-                compressor=None,  # Optional compression
+                compressor=self.components["compressor"],
                 entity_extractor=self.components["entity_extractor"],
                 kg_manager=self.components["graph_manager"],
                 conflict_resolver=self.components["conflict_resolver"],
                 message_bus=self.components["message_bus"],
-                access_control=self.components["access_control"]
+                access_control=self.components["access_control"],
+                llm_orchestrator=self.llm_orchestrator  # Pass LLM orchestrator
             )
             
             # Start metrics server
