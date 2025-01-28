@@ -2,7 +2,7 @@
 
 ## This Is The Largest Knowledge Graph In Existence.
 
-A quantum-accelerated distributed system for building and maintaining knowledge graphs using advanced AI/LLM agents. The system autonomously crawls, processes, and synthesizes web content into a coherent knowledge graph with built-in truth maintenance and conflict resolution.
+A quantum-accelerated distributed system for building and maintaining knowledge graphs using advanced AI/LLM agents. The system autonomously crawls, processes, and synthesizes web content into a coherent knowledge graph with built-in truth maintenance and conflict resolution. Deepseek is a placeholder LLM for now.
 
 ![Build Status](https://img.shields.io/badge/build-passing-brightgreen)
 ![Python Version](https://img.shields.io/badge/python-3.8-blue)
