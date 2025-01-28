@@ -1,0 +1,4048 @@
+
+================================================================================
+File: C:\aishrink\all_code.txt
+================================================================================
+
+
+
+
+================================================================================
+File: C:\aishrink\cli.py
+================================================================================
+
+#!/usr/bin/env python3
+import argparse
+import sys
+import logging
+from pathlib import Path
+from typing import List, Dict, Optional
+from modules.knowledge_graph.graph_manager import KnowledgeGraphManager
+from modules.security.access_control import AccessControl
+import yaml
+
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
+
+class KnowledgeGraphCLI:
+    def __init__(self, config_path: str = "config/config.yaml"):
+        self.config = self._load_config(config_path)
+        self.kg_manager = KnowledgeGraphManager(self.config)
+        self.access_control = AccessControl(self.config)
+
+    def _load_config(self, config_path: str) -> dict:
+        """Load configuration from YAML file"""
+        try:
+            with open(config_path, 'r') as f:
+                return yaml.safe_load(f)
+        except Exception as e:
+            logger.error(f"Failed to load config from {config_path}: {e}")
+            sys.exit(1)
+
+    def set_official_truth(self, entity1: str, relation: str, entity2: str, admin_id: str) -> bool:
+        """Mark a relationship as official truth"""
+        if not self.access_control.check_permission(admin_id, "manage:truth"):
+            logger.error(f"User {admin_id} does not have permission to set official truth")
+            return False
+
+        success = self.kg_manager.mark_as_official_truth(entity1, relation, entity2, admin_id)
+        if success:
+            logger.info(f"Marked ({entity1})-[{relation}]->({entity2}) as official truth")
+        else:
+            logger.error(f"Failed to mark relationship as official truth")
+        return success
+
+    def remove_official_truth(self, entity1: str, relation: str, entity2: str, admin_id: str) -> bool:
+        """Remove official truth status from a relationship"""
+        if not self.access_control.check_permission(admin_id, "manage:truth"):
+            logger.error(f"User {admin_id} does not have permission to remove official truth")
+            return False
+
+        try:
+            with self.kg_manager.driver.session() as session:
+                result = session.run(
+                    f"""
+                    MATCH (a:Entity {{name: $e1}})-[r:`{relation}`]->(b:Entity {{name: $e2}})
+                    REMOVE r.official_truth
+                    REMOVE r.official_truth_by
+                    REMOVE r.official_truth_at
+                    SET r.updated_at = timestamp()
+                    RETURN r
+                    """,
+                    e1=entity1, e2=entity2
+                )
+                success = bool(result.single())
+                if success:
+                    logger.info(f"Removed official truth status from ({entity1})-[{relation}]->({entity2})")
+                return success
+        except Exception as e:
+            logger.error(f"Error removing official truth: {e}")
+            return False
+
+    def list_relationships(self, filter_type: str = "all", limit: int = 100) -> List[Dict]:
+        """List relationships with optional filtering"""
+        try:
+            with self.kg_manager.driver.session() as session:
+                query = """
+                MATCH (a:Entity)-[r]->(b:Entity)
+                WHERE 1=1
+                """
+                
+                if filter_type == "disputed":
+                    query += " AND r.disputed = true"
+                elif filter_type == "official":
+                    query += " AND r.official_truth = true"
+                
+                query += """
+                RETURN a.name AS entity1, 
+                       type(r) AS relation, 
+                       b.name AS entity2, 
+                       r.confidence AS confidence,
+                       r.source AS source,
+                       r.official_truth AS is_official,
+                       r.disputed AS is_disputed
+                LIMIT $limit
+                """
+                
+                result = session.run(query, limit=limit)
+                relationships = []
+                
+                for record in result:
+                    rel = {
+                        "entity1": record["entity1"],
+                        "relation": record["relation"],
+                        "entity2": record["entity2"],
+                        "confidence": record["confidence"],
+                        "source": record["source"],
+                        "is_official": record["is_official"],
+                        "is_disputed": record["is_disputed"]
+                    }
+                    relationships.append(rel)
+                
+                return relationships
+        except Exception as e:
+            logger.error(f"Error listing relationships: {e}")
+            return []
+
+def main():
+    parser = argparse.ArgumentParser(description="Knowledge Graph Management CLI")
+    parser.add_argument("--config", default="config/config.yaml", help="Path to config file")
+
+    subparsers = parser.add_subparsers(dest="command", help="Available commands")
+
+    # Set official truth command
+    set_parser = subparsers.add_parser("set-official", help="Mark a relationship as official truth")
+    set_parser.add_argument("--entity1", required=True, help="Source entity name")
+    set_parser.add_argument("--relation", required=True, help="Relationship type")
+    set_parser.add_argument("--entity2", required=True, help="Target entity name")
+    set_parser.add_argument("--admin-id", required=True, help="Admin user ID")
+
+    # Remove official truth command
+    unset_parser = subparsers.add_parser("unset-official", help="Remove official truth status")
+    unset_parser.add_argument("--entity1", required=True)
+    unset_parser.add_argument("--relation", required=True)
+    unset_parser.add_argument("--entity2", required=True)
+    unset_parser.add_argument("--admin-id", required=True)
+
+    # List relationships command
+    list_parser = subparsers.add_parser("list", help="List relationships")
+    list_parser.add_argument("--filter", choices=["all", "disputed", "official"], 
+                            default="all", help="Filter relationships")
+    list_parser.add_argument("--limit", type=int, default=100, 
+                            help="Maximum number of relationships to show")
+
+    args = parser.parse_args()
+
+    # Initialize CLI
+    cli = KnowledgeGraphCLI(args.config)
+
+    if args.command == "set-official":
+        success = cli.set_official_truth(
+            args.entity1, args.relation, args.entity2, args.admin_id
+        )
+        sys.exit(0 if success else 1)
+
+    elif args.command == "unset-official":
+        success = cli.remove_official_truth(
+            args.entity1, args.relation, args.entity2, args.admin_id
+        )
+        sys.exit(0 if success else 1)
+
+    elif args.command == "list":
+        relationships = cli.list_relationships(args.filter, args.limit)
+        if relationships:
+            print("\nKnowledge Graph Relationships:")
+            print("=" * 80)
+            for rel in relationships:
+                status = []
+                if rel["is_official"]:
+                    status.append("OFFICIAL")
+                if rel["is_disputed"]:
+                    status.append("DISPUTED")
+                status_str = f" [{', '.join(status)}]" if status else ""
+                
+                print(f"{rel['entity1']} -[{rel['relation']}]-> {rel['entity2']}"
+                      f"{status_str} (conf: {rel['confidence']:.2f})")
+            print(f"\nTotal: {len(relationships)} relationships")
+        else:
+            print("No relationships found")
+
+    else:
+        parser.print_help()
+        sys.exit(1)
+
+if __name__ == "__main__":
+    main() 
+
+
+================================================================================
+File: C:\aishrink\docker-compose.yml
+================================================================================
+
+version: '3.8'
+
+secrets:
+  neo4j_password:
+    file: ./secrets/neo4j_password.txt
+  encryption_key:
+    file: ./secrets/encryption_key.txt
+
+x-crawler-common: &crawler-common
+  build: .
+  restart: unless-stopped
+  depends_on:
+    neo4j:
+      condition: service_healthy
+  networks:
+    - pipeline_network
+  secrets:
+    - neo4j_password
+    - encryption_key
+  environment:
+    - NEO4J_PASSWORD_FILE=/run/secrets/neo4j_password
+    - ENCRYPTION_KEY_FILE=/run/secrets/encryption_key
+  logging:
+    driver: "json-file"
+    options:
+      max-size: "200m"
+      max-file: "10"
+  deploy:
+    resources:
+      limits:
+        cpus: '1'
+        memory: 2G
+      reservations:
+        cpus: '0.25'
+        memory: 512M
+
+services:
+  # Full node with all capabilities
+  crawler_node1:
+    <<: *crawler-common
+    environment:
+      - NODE_ID=node1
+      - NODE_ROLE=full
+      - NEO4J_URI=bolt://neo4j:7687
+      - NEO4J_USER=neo4j
+      - NEO4J_PASSWORD_FILE=/run/secrets/neo4j_password
+      - ENCRYPTION_KEY_FILE=/run/secrets/encryption_key
+      - LOG_LEVEL=INFO
+    volumes:
+      - crawler_data1:/app/data
+
+  # Crawler-only node
+  crawler_node2:
+    <<: *crawler-common
+    environment:
+      - NODE_ID=node2
+      - NODE_ROLE=crawler-only
+      - NEO4J_URI=bolt://neo4j:7687
+      - NEO4J_USER=neo4j
+      - NEO4J_PASSWORD_FILE=/run/secrets/neo4j_password
+      - ENCRYPTION_KEY_FILE=/run/secrets/encryption_key
+      - LOG_LEVEL=INFO
+    volumes:
+      - crawler_data2:/app/data
+
+  # Knowledge graph only node
+  kg_node:
+    <<: *crawler-common
+    environment:
+      - NODE_ID=kg1
+      - NODE_ROLE=kg-only
+      - NEO4J_URI=bolt://neo4j:7687
+      - NEO4J_USER=neo4j
+      - NEO4J_PASSWORD_FILE=/run/secrets/neo4j_password
+      - ENCRYPTION_KEY_FILE=/run/secrets/encryption_key
+      - LOG_LEVEL=INFO
+    volumes:
+      - kg_data:/app/data
+
+  # Neo4j database
+  neo4j:
+    image: neo4j:4.4
+    secrets:
+      - neo4j_password
+    environment:
+      - NEO4J_AUTH=neo4j/DOCKER-SECRET:neo4j_password
+      - NEO4J_dbms_memory_heap_initial__size=512M
+      - NEO4J_dbms_memory_heap_max__size=2G
+    ports:
+      - "7474:7474"  # HTTP
+      - "7687:7687"  # Bolt
+    volumes:
+      - neo4j_data:/data
+    networks:
+      - pipeline_network
+    healthcheck:
+      test: ["CMD-SHELL", "wget --no-verbose --tries=1 --spider localhost:7474 || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+    deploy:
+      resources:
+        limits:
+          cpus: '2'
+          memory: 4G
+        reservations:
+          cpus: '0.5'
+          memory: 1G
+
+  # Prometheus for monitoring
+  prometheus:
+    image: prom/prometheus:latest
+    volumes:
+      - ./prometheus.yml:/etc/prometheus/prometheus.yml
+      - ./prometheus/alerts.yml:/etc/prometheus/alerts.yml
+      - prometheus_data:/prometheus
+    command:
+      - '--config.file=/etc/prometheus/prometheus.yml'
+      - '--storage.tsdb.path=/prometheus'
+    ports:
+      - "9090:9090"
+    networks:
+      - pipeline_network
+    depends_on:
+      - alertmanager
+
+  # Grafana for visualization
+  grafana:
+    image: grafana/grafana:latest
+    depends_on:
+      - prometheus
+    ports:
+      - "3000:3000"
+    volumes:
+      - grafana_data:/var/lib/grafana
+      - ./grafana/dashboards:/etc/grafana/dashboards
+      - ./grafana/provisioning/dashboards:/etc/grafana/provisioning/dashboards
+    networks:
+      - pipeline_network
+    environment:
+      - GF_SECURITY_ADMIN_PASSWORD=admin
+      - GF_USERS_ALLOW_SIGN_UP=false
+      - GF_INSTALL_PLUGINS=grafana-piechart-panel
+
+  # Alertmanager for alert notifications
+  alertmanager:
+    image: prom/alertmanager:latest
+    volumes:
+      - ./alertmanager/config.yml:/etc/alertmanager/config.yml
+      - alertmanager_data:/alertmanager
+    command:
+      - '--config.file=/etc/alertmanager/config.yml'
+      - '--storage.path=/alertmanager'
+    ports:
+      - "9093:9093"
+    networks:
+      - pipeline_network
+
+volumes:
+  neo4j_data:
+  crawler_data1:
+  crawler_data2:
+  kg_data:
+  prometheus_data:
+  grafana_data:
+  alertmanager_data:
+
+networks:
+  pipeline_network:
+    driver: bridge 
+
+
+================================================================================
+File: C:\aishrink\Dockerfile
+================================================================================
+
+# Use Python 3.8 as base image
+FROM python:3.8-slim
+
+# Set working directory
+WORKDIR /app
+
+# Set environment variables
+ENV PYTHONUNBUFFERED=1 \
+    PYTHONDONTWRITEBYTECODE=1 \
+    DEBIAN_FRONTEND=noninteractive
+
+# Install system dependencies
+RUN apt-get update && apt-get install -y \
+    build-essential \
+    curl \
+    netcat \
+    && rm -rf /var/lib/apt/lists/*
+
+# Create non-root user
+RUN useradd -m -s /bin/bash appuser
+
+# Copy requirements first (for better caching)
+COPY requirements.txt .
+RUN pip install --no-cache-dir -r requirements.txt
+
+# Download spaCy model
+RUN python -m spacy download en_core_web_sm
+
+# Copy application code
+COPY . .
+
+# Copy health check script
+COPY docker/healthcheck.py /usr/local/bin/
+RUN chmod +x /usr/local/bin/healthcheck.py
+
+# Set ownership
+RUN chown -R appuser:appuser /app
+
+# Switch to non-root user
+USER appuser
+
+# Health check
+HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
+    CMD python /usr/local/bin/healthcheck.py
+
+# Environment variables
+ENV NODE_ID="node1" \
+    NODE_ROLE="full" \
+    NEO4J_URI="bolt://neo4j:7687" \
+    NEO4J_USER="neo4j" \
+    NEO4J_PASSWORD="password" \
+    LOG_LEVEL="INFO"
+
+# Command to run the application
+CMD ["python", "main.py"] 
+
+
+================================================================================
+File: C:\aishrink\main.py
+================================================================================
+
+import asyncio
+import logging
+import yaml
+from pathlib import Path
+import signal
+import sys
+from typing import Optional
+import structlog
+
+# Import our modules
+from modules.crawler.crawler_agent import CrawlerAgent
+from modules.crawler.frontier_manager import FrontierManager
+from modules.ingestion.dedup import DeduplicationManager
+from modules.ingestion.embeddings import EmbeddingModel
+from modules.knowledge_graph.graph_manager import KnowledgeGraphManager
+from modules.knowledge_graph.entity_extraction import EntityExtractor
+from modules.knowledge_graph.conflict_resolution import ConflictResolver
+from modules.messaging.message_bus import MessageBus
+from modules.messaging.p2p_node import P2PNode
+from modules.security.encryption import EncryptionManager, SecureMessage
+from modules.security.access_control import AccessControl
+from modules.config.config_loader import ConfigLoader
+from modules.monitoring.metrics_server import MetricsServer
+from modules.logging.log_config import configure_logging
+
+# Configure logging
+logger = configure_logging()
+
+class DecentralizedPipeline:
+    """Main application class that coordinates all components"""
+    
+    def __init__(self, config_path: str = "config/config.yaml"):
+        self.config = self._load_config(config_path)
+        self.running = False
+        self.components = {}
+        self.logger = structlog.get_logger()
+        
+    def _load_config(self, config_path: str) -> dict:
+        """Load configuration from YAML file"""
+        try:
+            with open(config_path, 'r') as f:
+                config = yaml.safe_load(f)
+            logger.info("Configuration loaded successfully")
+            return config
+        except Exception as e:
+            logger.error(f"Failed to load config from {config_path}: {e}")
+            raise
+
+    async def initialize(self):
+        """Initialize all system components"""
+        try:
+            self.logger.info("initializing_pipeline",
+                            node_id=self.config["node"]["id"],
+                            role=self.config["node"]["role"])
+            
+            # Initialize security components first
+            self.components["encryption"] = EncryptionManager(self.config)
+            self.components["access_control"] = AccessControl(self.config)
+            
+            # Initialize messaging
+            self.components["message_bus"] = MessageBus(self.config)
+            self.components["p2p_node"] = P2PNode(
+                self.config,
+                self.components["message_bus"]
+            )
+            
+            # Initialize knowledge graph components
+            self.components["graph_manager"] = KnowledgeGraphManager(self.config)
+            self.components["entity_extractor"] = EntityExtractor()
+            self.components["conflict_resolver"] = ConflictResolver(self.config)
+            
+            # Initialize ingestion components
+            self.components["embedding_model"] = EmbeddingModel()
+            self.components["dedup_manager"] = DeduplicationManager(
+                self.config,
+                self.components["embedding_model"]
+            )
+            
+            # Initialize crawler components
+            self.components["frontier_manager"] = FrontierManager(
+                self.config,
+                self.components["message_bus"]
+            )
+            
+            self.components["crawler"] = CrawlerAgent(
+                config=self.config,
+                frontier_manager=self.components["frontier_manager"],
+                deduper=self.components["dedup_manager"],
+                compressor=None,  # Optional compression
+                entity_extractor=self.components["entity_extractor"],
+                kg_manager=self.components["graph_manager"],
+                conflict_resolver=self.components["conflict_resolver"],
+                message_bus=self.components["message_bus"],
+                access_control=self.components["access_control"]
+            )
+            
+            # Start metrics server
+            self.metrics_server = MetricsServer()
+            await self.metrics_server.start()
+            
+            logger.info("All components initialized successfully")
+            
+        except Exception as e:
+            logger.error(f"Failed to initialize components: {e}")
+            raise
+
+    async def start(self):
+        """Start the pipeline"""
+        try:
+            self.running = True
+            logger.info("Starting decentralized pipeline...")
+            
+            # Register signal handlers
+            for sig in (signal.SIGTERM, signal.SIGINT):
+                signal.signal(sig, self._signal_handler)
+            
+            # Main processing loop
+            while self.running:
+                try:
+                    # Run crawler cycle
+                    await self.components["crawler"].crawl_cycle()
+                    
+                    # Sleep briefly between cycles
+                    await asyncio.sleep(1)
+                    
+                except Exception as e:
+                    logger.error(f"Error in main processing loop: {e}")
+                    await asyncio.sleep(5)  # Back off on error
+                    
+        except Exception as e:
+            logger.error(f"Error starting pipeline: {e}")
+            raise
+        finally:
+            await self.shutdown()
+
+    def _signal_handler(self, signum, frame):
+        """Handle shutdown signals"""
+        logger.info(f"Received signal {signum}")
+        self.running = False
+
+    async def shutdown(self):
+        """Gracefully shutdown all components"""
+        logger.info("Shutting down pipeline...")
+        
+        try:
+            # Close knowledge graph connection
+            if "graph_manager" in self.components:
+                self.components["graph_manager"].close()
+            
+            # Close message bus
+            if "message_bus" in self.components:
+                self.components["message_bus"].close()
+            
+            # Stop metrics server
+            await self.metrics_server.stop()
+            
+            logger.info("Shutdown complete")
+            
+        except Exception as e:
+            logger.error(f"Error during shutdown: {e}")
+
+async def main():
+    """Application entry point"""
+    # Load config with secrets
+    config = ConfigLoader.load_config()
+    
+    pipeline = DecentralizedPipeline()
+    
+    try:
+        await pipeline.initialize()
+        await pipeline.start()
+    except Exception as e:
+        logger.error(f"Pipeline failed: {e}")
+        sys.exit(1)
+
+if __name__ == "__main__":
+    asyncio.run(main()) 
+
+
+================================================================================
+File: C:\aishrink\prometheus.yml
+================================================================================
+
+global:
+  scrape_interval: 15s
+  evaluation_interval: 15s
+
+rule_files:
+  - /etc/prometheus/alerts.yml
+
+alerting:
+  alertmanagers:
+    - static_configs:
+        - targets:
+          - alertmanager:9093
+
+scrape_configs:
+  - job_name: 'crawler_nodes'
+    static_configs:
+      - targets: ['crawler_node1:8000', 'crawler_node2:8000', 'kg_node:8000']
+
+  - job_name: 'neo4j'
+    static_configs:
+      - targets: ['neo4j:2004'] 
+
+
+================================================================================
+File: C:\aishrink\requirements.txt
+================================================================================
+
+requests==2.31.0
+beautifulsoup4==4.12.2
+numpy==1.24.3
+scikit-learn==1.3.0
+torch==2.0.1
+transformers==4.31.0
+neo4j==5.8.0
+pyzmq==25.1.0
+pydantic==1.10.8
+PyYAML==6.0
+cryptography==41.0.2
+python-dotenv==1.0.0
+spacy==3.7.2
+PyJWT==2.8.0
+pytest==7.4.3
+pytest-asyncio==0.21.1
+prometheus_client==0.16.0
+psutil==5.9.5
+structlog==23.1.0
+python-json-logger==2.0.7 
+
+
+================================================================================
+File: C:\aishrink\alertmanager\config.yml
+================================================================================
+
+global:
+  resolve_timeout: 5m
+
+route:
+  group_by: ['alertname']
+  group_wait: 10s
+  group_interval: 10s
+  repeat_interval: 1h
+  receiver: 'email-notifications'
+
+receivers:
+  - name: 'email-notifications'
+    email_configs:
+      - to: 'admin@example.com'
+        from: 'alertmanager@example.com'
+        smarthost: 'smtp.example.com:587'
+        auth_username: 'alertmanager'
+        auth_password: 'password'
+
+  - name: 'slack-notifications'
+    slack_configs:
+      - api_url: 'https://hooks.slack.com/services/YOUR/SLACK/WEBHOOK'
+        channel: '#alerts'
+        send_resolved: true 
+
+
+================================================================================
+File: C:\aishrink\config\config.yaml
+================================================================================
+
+node:
+  id: "node1"
+  shard_range: [0, 9999]
+  role: "full"
+
+crawler:
+  max_pages_per_cycle: 50
+  user_agent: "DecentralizedCrawler/1.0"
+  politeness_delay: 1.0
+  start_urls:
+    - "https://example.com"
+    - "https://wikipedia.org"
+
+dedup:
+  similarity_threshold: 0.9
+
+knowledge_graph:
+  neo4j_uri: "bolt://neo4j:7687"
+  neo4j_user: "neo4j"
+  # neo4j_password is loaded from Docker secrets
+  
+  # Added bias configuration
+  domain_trust_scores:
+    wikipedia.org: 0.9
+    gov: 0.8
+    edu: 0.8
+    blogspot.com: 0.3
+  
+  bias_overrides:
+    official_sources:
+      - "worldhealth.org"
+      - "who.int"
+      - "cdc.gov"
+    domain_boost:
+      "nytimes.com": 1.5
+      "reuters.com": 1.4
+      "nature.com": 1.8
+      "science.org": 1.8
+
+security:
+  encryption_at_rest: true
+  encryption_in_flight: true
+  role_based_access: true
+  allowed_roles:
+    - admin
+    - analyst
+    - crawler
+  # encryption_key is loaded from Docker secrets
+
+security:
+  encryption_at_rest: true
+  encryption_in_flight: true
+  role_based_access: true
+  allowed_roles:
+    - admin
+    - analyst
+    - crawler
+
+sharding:
+  enabled: true
+  nodes:
+    node1:
+      host: "crawler_node1"
+      port: 7687
+      role: "full"
+    node2:
+      host: "crawler_node2"
+      port: 7687
+      role: "crawler"
+    kg_node:
+      host: "kg_node"
+      port: 7687
+      role: "kg" 
+
+
+================================================================================
+File: C:\aishrink\docker\healthcheck.py
+================================================================================
+
+#!/usr/bin/env python3
+import socket
+import sys
+import os
+import requests
+import neo4j
+
+def check_neo4j():
+    """Check Neo4j connection"""
+    try:
+        driver = neo4j.GraphDatabase.driver(
+            os.environ["NEO4J_URI"],
+            auth=(os.environ["NEO4J_USER"], os.environ["NEO4J_PASSWORD"])
+        )
+        with driver.session() as session:
+            result = session.run("RETURN 1")
+            return bool(result.single())
+    except:
+        return False
+
+def check_zmq_ports():
+    """Check if ZMQ ports are listening"""
+    try:
+        sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        result = sock.connect_ex(('127.0.0.1', 5556))
+        sock.close()
+        return result == 0
+    except:
+        return False
+
+def main():
+    checks = [
+        check_neo4j(),
+        check_zmq_ports()
+    ]
+    
+    if all(checks):
+        sys.exit(0)
+    sys.exit(1)
+
+if __name__ == "__main__":
+    main() 
+
+
+================================================================================
+File: C:\aishrink\grafana\dashboards\alerts_dashboard.json
+================================================================================
+
+{
+  "title": "Alerts Overview",
+  "panels": [
+    {
+      "title": "Active Alerts",
+      "type": "table",
+      "datasource": "Prometheus",
+      "targets": [
+        {
+          "expr": "ALERTS{alertstate=\"firing\"}"
+        }
+      ],
+      "transformations": [
+        {
+          "id": "organize",
+          "options": {
+            "excludeByName": {
+              "Value": true,
+              "job": true
+            },
+            "indexByName": {},
+            "renameByName": {
+              "alertname": "Alert",
+              "severity": "Severity",
+              "instance": "Instance"
+            }
+          }
+        }
+      ]
+    }
+  ]
+} 
+
+
+================================================================================
+File: C:\aishrink\grafana\dashboards\pipeline_dashboard.json
+================================================================================
+
+{
+  "annotations": {
+    "list": []
+  },
+  "editable": true,
+  "fiscalYearStartMonth": 0,
+  "graphTooltip": 0,
+  "id": 1,
+  "links": [],
+  "liveNow": false,
+  "panels": [
+    {
+      "collapsed": false,
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 0
+      },
+      "id": 12,
+      "panels": [],
+      "title": "Crawler Performance",
+      "type": "row"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              }
+            ]
+          },
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 1
+      },
+      "id": 1,
+      "options": {
+        "orientation": "auto",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "showThresholdLabels": false,
+        "showThresholdMarkers": true
+      },
+      "pluginVersion": "10.0.3",
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "expr": "rate(pages_crawled_total[5m])",
+          "refId": "A"
+        }
+      ],
+      "title": "Pages Crawled (per second)",
+      "type": "gauge"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "axisCenteredZero": false,
+            "axisColorMode": "text",
+            "axisLabel": "",
+            "axisPlacement": "auto",
+            "barAlignment": 0,
+            "drawStyle": "line",
+            "fillOpacity": 20,
+            "gradientMode": "none",
+            "hideFrom": {
+              "legend": false,
+              "tooltip": false,
+              "viz": false
+            },
+            "lineInterpolation": "linear",
+            "lineWidth": 2,
+            "pointSize": 5,
+            "scaleDistribution": {
+              "type": "linear"
+            },
+            "showPoints": "never",
+            "spanNulls": true,
+            "stacking": {
+              "group": "A",
+              "mode": "none"
+            },
+            "thresholdsStyle": {
+              "mode": "off"
+            }
+          },
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              }
+            ]
+          },
+          "unit": "s"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 1
+      },
+      "id": 2,
+      "options": {
+        "legend": {
+          "calcs": [
+            "mean",
+            "max"
+          ],
+          "displayMode": "table",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "single",
+          "sort": "none"
+        }
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "expr": "rate(crawl_duration_seconds_sum[5m]) / rate(crawl_duration_seconds_count[5m])",
+          "legendFormat": "Average Crawl Time",
+          "refId": "A"
+        }
+      ],
+      "title": "Average Crawl Duration",
+      "type": "timeseries"
+    },
+    {
+      "collapsed": false,
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 9
+      },
+      "id": 13,
+      "panels": [],
+      "title": "Knowledge Graph",
+      "type": "row"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "axisCenteredZero": false,
+            "axisColorMode": "text",
+            "axisLabel": "",
+            "axisPlacement": "auto",
+            "barAlignment": 0,
+            "drawStyle": "line",
+            "fillOpacity": 20,
+            "gradientMode": "none",
+            "hideFrom": {
+              "legend": false,
+              "tooltip": false,
+              "viz": false
+            },
+            "lineInterpolation": "linear",
+            "lineWidth": 2,
+            "pointSize": 5,
+            "scaleDistribution": {
+              "type": "linear"
+            },
+            "showPoints": "never",
+            "spanNulls": true,
+            "stacking": {
+              "group": "A",
+              "mode": "none"
+            },
+            "thresholdsStyle": {
+              "mode": "off"
+            }
+          },
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 10
+      },
+      "id": 3,
+      "options": {
+        "legend": {
+          "calcs": [
+            "mean",
+            "max"
+          ],
+          "displayMode": "table",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "single",
+          "sort": "none"
+        }
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "expr": "rate(relationships_created_total[5m])",
+          "legendFormat": "New Relationships",
+          "refId": "A"
+        }
+      ],
+      "title": "Knowledge Graph Growth",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "thresholds"
+          },
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "red",
+                "value": 80
+              }
+            ]
+          },
+          "unit": "percent"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 10
+      },
+      "id": 4,
+      "options": {
+        "minVizHeight": 75,
+        "minVizWidth": 75,
+        "orientation": "auto",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "showThresholdLabels": false,
+        "showThresholdMarkers": true,
+        "text": {}
+      },
+      "pluginVersion": "10.0.3",
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "expr": "cpu_usage_percent",
+          "refId": "A"
+        }
+      ],
+      "title": "CPU Usage",
+      "type": "gauge"
+    },
+    {
+      "collapsed": false,
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 18
+      },
+      "id": 14,
+      "panels": [],
+      "title": "Content Processing",
+      "type": "row"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "axisCenteredZero": false,
+            "axisColorMode": "text",
+            "axisLabel": "",
+            "axisPlacement": "auto",
+            "barAlignment": 0,
+            "drawStyle": "line",
+            "fillOpacity": 20,
+            "gradientMode": "none",
+            "hideFrom": {
+              "legend": false,
+              "tooltip": false,
+              "viz": false
+            },
+            "lineInterpolation": "linear",
+            "lineWidth": 2,
+            "pointSize": 5,
+            "scaleDistribution": {
+              "type": "linear"
+            },
+            "showPoints": "never",
+            "spanNulls": true,
+            "stacking": {
+              "group": "A",
+              "mode": "none"
+            },
+            "thresholdsStyle": {
+              "mode": "off"
+            }
+          },
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 19
+      },
+      "id": 5,
+      "options": {
+        "legend": {
+          "calcs": [],
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "single",
+          "sort": "none"
+        }
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "expr": "rate(chunks_processed_total[5m])",
+          "legendFormat": "Chunks Processed",
+          "refId": "A"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "expr": "rate(duplicate_chunks_total[5m])",
+          "hide": false,
+          "legendFormat": "Duplicates",
+          "refId": "B"
+        }
+      ],
+      "title": "Content Processing Rate",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "thresholds"
+          },
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "red",
+                "value": 80
+              }
+            ]
+          },
+          "unit": "bytes"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 19
+      },
+      "id": 6,
+      "options": {
+        "orientation": "auto",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "showThresholdLabels": false,
+        "showThresholdMarkers": true
+      },
+      "pluginVersion": "10.0.3",
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "expr": "memory_usage_bytes",
+          "refId": "A"
+        }
+      ],
+      "title": "Memory Usage",
+      "type": "gauge"
+    }
+  ],
+  "refresh": "5s",
+  "schemaVersion": 38,
+  "style": "dark",
+  "tags": [],
+  "templating": {
+    "list": []
+  },
+  "time": {
+    "from": "now-1h",
+    "to": "now"
+  },
+  "timepicker": {},
+  "timezone": "",
+  "title": "Pipeline Dashboard",
+  "uid": "pipeline",
+  "version": 1,
+  "weekStart": ""
+} 
+
+
+================================================================================
+File: C:\aishrink\grafana\provisioning\dashboards\pipeline.yaml
+================================================================================
+
+apiVersion: 1
+
+providers:
+  - name: 'Pipeline Dashboard'
+    orgId: 1
+    folder: ''
+    type: file
+    disableDeletion: false
+    editable: true
+    options:
+      path: /etc/grafana/dashboards 
+
+
+================================================================================
+File: C:\aishrink\modules\config\config_loader.py
+================================================================================
+
+import yaml
+from .secret_loader import get_neo4j_password, get_encryption_key
+
+class ConfigLoader:
+    @staticmethod
+    def load_config(config_path: str = "config/config.yaml") -> dict:
+        """Load configuration with secrets"""
+        with open(config_path, 'r') as f:
+            config = yaml.safe_load(f)
+        
+        # Inject secrets
+        if 'knowledge_graph' in config:
+            config['knowledge_graph']['neo4j_password'] = get_neo4j_password()
+        
+        if 'security' in config:
+            config['security']['encryption_key'] = get_encryption_key()
+        
+        return config 
+
+
+================================================================================
+File: C:\aishrink\modules\config\secret_loader.py
+================================================================================
+
+import os
+from typing import Optional
+
+def read_secret(secret_name: str) -> Optional[str]:
+    """Read a secret from Docker secrets or environment variable"""
+    # Check for Docker secret file
+    secret_file = f"/run/secrets/{secret_name}"
+    if os.path.exists(secret_file):
+        with open(secret_file, 'r') as f:
+            return f.read().strip()
+    
+    # Fall back to environment variable
+    env_var = f"{secret_name.upper()}"
+    return os.environ.get(env_var)
+
+def get_neo4j_password() -> str:
+    """Get Neo4j password from secrets or environment"""
+    password = None
+    
+    # Try Docker secret file
+    if os.environ.get('NEO4J_PASSWORD_FILE'):
+        with open(os.environ['NEO4J_PASSWORD_FILE'], 'r') as f:
+            password = f.read().strip()
+    
+    # Fall back to environment variable
+    if not password:
+        password = os.environ.get('NEO4J_PASSWORD', 'neo4j')
+    
+    return password
+
+def get_encryption_key() -> bytes:
+    """Get encryption key from secrets or environment"""
+    key = None
+    
+    # Try Docker secret file
+    if os.environ.get('ENCRYPTION_KEY_FILE'):
+        with open(os.environ['ENCRYPTION_KEY_FILE'], 'r') as f:
+            key = f.read().strip().encode()
+    
+    # Fall back to environment variable
+    if not key:
+        key = os.environ.get('ENCRYPTION_KEY', 'default_key').encode()
+    
+    return key 
+
+
+================================================================================
+File: C:\aishrink\modules\crawler\crawler_agent.py
+================================================================================
+
+import asyncio
+import aiohttp
+import logging
+from typing import List, Dict, Optional
+from bs4 import BeautifulSoup
+from urllib.parse import urljoin
+from ..monitoring.metrics import (
+    PAGES_CRAWLED, CRAWL_ERRORS, URLS_EXTRACTED, 
+    CHUNKS_PROCESSED, MetricsMiddleware
+)
+
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
+
+class CrawlerAgent:
+    def __init__(self, config, frontier_manager, deduper, compressor, 
+                 entity_extractor, kg_manager, conflict_resolver, 
+                 message_bus, access_control):
+        self.config = config
+        self.frontier_manager = frontier_manager
+        self.deduper = deduper
+        self.compressor = compressor
+        self.entity_extractor = entity_extractor
+        self.kg_manager = kg_manager
+        self.conflict_resolver = conflict_resolver
+        self.message_bus = message_bus
+        self.access_control = access_control
+        
+        self.user_agent = config["crawler"]["user_agent"]
+        self.max_concurrent = config["crawler"].get("max_concurrent_requests", 5)
+        self.politeness_delay = config["crawler"].get("politeness_delay", 1.0)
+        self.timeout = config["crawler"].get("timeout", 30)
+        self.max_retries = config["crawler"].get("max_retries", 3)
+        
+        # Initialize with start URLs if provided
+        if "start_urls" in config["crawler"]:
+            self.frontier_manager.add_urls(config["crawler"]["start_urls"])
+
+        # Rate limiting per domain
+        self.domain_delays = {}
+        self.domain_last_access = {}
+
+    @MetricsMiddleware.track_crawl_time
+    async def crawl_cycle(self):
+        """Run one crawl cycle with parallel requests"""
+        urls = self.frontier_manager.get_next_batch()
+        if not urls:
+            logger.info("No URLs in frontier, waiting...")
+            return
+
+        PAGES_CRAWLED.inc(len(urls))
+
+        # Group URLs by domain for politeness
+        domain_groups = self._group_urls_by_domain(urls)
+        
+        # Create tasks for each domain group
+        tasks = []
+        async with aiohttp.ClientSession() as session:
+            for domain, domain_urls in domain_groups.items():
+                task = asyncio.create_task(
+                    self._process_domain_urls(session, domain, domain_urls)
+                )
+                tasks.append(task)
+            
+            # Wait for all domain tasks to complete
+            await asyncio.gather(*tasks)
+
+    async def _process_domain_urls(self, session: aiohttp.ClientSession, 
+                                 domain: str, urls: List[str]) -> None:
+        """Process all URLs for a single domain with politeness delay"""
+        for url in urls:
+            # Respect politeness delay for this domain
+            await self._wait_for_politeness(domain)
+            
+            try:
+                content = await self._fetch_url(session, url)
+                if content:
+                    await self._process_content(url, content)
+            except Exception as e:
+                logger.error(f"Error processing {url}: {e}")
+
+            # Update last access time for this domain
+            self.domain_last_access[domain] = asyncio.get_event_loop().time()
+
+    async def _fetch_url(self, session: aiohttp.ClientSession, url: str) -> Optional[str]:
+        """Fetch a URL with retries"""
+        headers = {"User-Agent": self.user_agent}
+        
+        for attempt in range(self.max_retries):
+            try:
+                async with session.get(url, headers=headers, 
+                                     timeout=self.timeout) as response:
+                    if response.status == 200:
+                        PAGES_CRAWLED.inc()
+                        return await response.text()
+                    else:
+                        logger.warning(f"HTTP {response.status} for {url}")
+                        return None
+            except asyncio.TimeoutError:
+                logger.warning(f"Timeout fetching {url}, attempt {attempt + 1}")
+            except Exception as e:
+                CRAWL_ERRORS.labels(error_type=type(e).__name__).inc()
+                return None
+            
+            # Wait before retry
+            if attempt < self.max_retries - 1:
+                await asyncio.sleep(2 ** attempt)  # Exponential backoff
+        
+        return None
+
+    async def _process_content(self, url: str, content: str) -> None:
+        """Process fetched content"""
+        # Extract text chunks
+        soup = BeautifulSoup(content, "html.parser")
+        chunks = self._extract_chunks(soup)
+        
+        # Process each chunk
+        for chunk in chunks:
+            # Check for duplicates
+            is_new, chunk_id, compressed = self.deduper.process_chunk(chunk)
+            if is_new:
+                # Extract entities and relationships
+                facts = self.entity_extractor.extract_entities(chunk)
+                
+                # Update knowledge graph
+                if facts:
+                    self.kg_manager.add_facts(facts, self.conflict_resolver)
+        
+        # Extract and queue new URLs
+        new_urls = self._extract_urls(soup, url)
+        if new_urls:
+            self.frontier_manager.add_urls(new_urls)
+            URLS_EXTRACTED.inc(len(new_urls))
+        
+        CHUNKS_PROCESSED.inc(len(chunks))
+
+    def _extract_chunks(self, soup: BeautifulSoup) -> List[str]:
+        """Extract text chunks from HTML"""
+        chunks = []
+        for p in soup.find_all(["p", "article", "section"]):
+            text = p.get_text(separator=" ", strip=True)
+            if len(text) > 50:  # Minimum length threshold
+                chunks.append(text)
+        return chunks
+
+    def _extract_urls(self, soup: BeautifulSoup, base_url: str) -> List[str]:
+        """Extract and normalize URLs from HTML"""
+        urls = []
+        for a in soup.find_all("a", href=True):
+            href = a["href"]
+            # Normalize URL
+            url = urljoin(base_url, href)
+            # Basic URL filtering
+            if url.startswith(("http://", "https://")):
+                urls.append(url)
+        return urls
+
+    def _group_urls_by_domain(self, urls: List[str]) -> Dict[str, List[str]]:
+        """Group URLs by domain for polite crawling"""
+        from urllib.parse import urlparse
+        groups = {}
+        for url in urls:
+            try:
+                domain = urlparse(url).netloc
+                if domain not in groups:
+                    groups[domain] = []
+                groups[domain].append(url)
+            except Exception:
+                logger.warning(f"Invalid URL: {url}")
+        return groups
+
+    async def _wait_for_politeness(self, domain: str) -> None:
+        """Wait appropriate time for politeness"""
+        now = asyncio.get_event_loop().time()
+        last_access = self.domain_last_access.get(domain, 0)
+        delay = self.domain_delays.get(domain, self.politeness_delay)
+        
+        wait_time = last_access + delay - now
+        if wait_time > 0:
+            await asyncio.sleep(wait_time) 
+
+
+================================================================================
+File: C:\aishrink\modules\crawler\frontier_manager.py
+================================================================================
+
+import random
+from typing import List, Set
+import logging
+from urllib.parse import urlparse
+
+logger = logging.getLogger(__name__)
+
+class FrontierManager:
+    """Manages the queue of URLs to be crawled"""
+    
+    def __init__(self, config, message_bus):
+        self.config = config
+        self.message_bus = message_bus
+        self.local_frontier: Set[str] = set()
+        self.visited_urls: Set[str] = set()
+        self.batch_size = config["crawler"].get("max_pages_per_cycle", 10)
+        
+        # Subscribe to peer messages about new URLs
+        self.message_bus.subscribe("new_urls", self._handle_peer_urls)
+        
+    def add_urls(self, urls: List[str]) -> None:
+        """Add new URLs to the frontier"""
+        new_urls = []
+        
+        for url in urls:
+            # Basic URL validation and normalization
+            try:
+                parsed = urlparse(url)
+                if not parsed.scheme or not parsed.netloc:
+                    continue
+                
+                normalized_url = f"{parsed.scheme}://{parsed.netloc}{parsed.path}"
+                if parsed.query:
+                    normalized_url += f"?{parsed.query}"
+                    
+                # Skip if already visited or in frontier
+                if normalized_url in self.visited_urls or normalized_url in self.local_frontier:
+                    continue
+                    
+                self.local_frontier.add(normalized_url)
+                new_urls.append(normalized_url)
+                
+            except Exception as e:
+                logger.warning(f"Error processing URL {url}: {e}")
+                continue
+        
+        # Share new URLs with peers if any were added
+        if new_urls:
+            self.message_bus.publish("new_urls", new_urls)
+            logger.info(f"Added {len(new_urls)} new URLs to frontier")
+            
+    def get_next_batch(self) -> List[str]:
+        """Get the next batch of URLs to crawl"""
+        if not self.local_frontier:
+            return []
+            
+        # Select random sample to avoid getting stuck in one domain
+        batch_size = min(self.batch_size, len(self.local_frontier))
+        batch = random.sample(list(self.local_frontier), batch_size)
+        
+        # Remove selected URLs from frontier and mark as visited
+        for url in batch:
+            self.local_frontier.remove(url)
+            self.visited_urls.add(url)
+            
+        return batch
+        
+    def _handle_peer_urls(self, message: dict) -> None:
+        """Handle new URLs received from peers"""
+        if "urls" in message:
+            self.add_urls(message["urls"]) 
+
+
+================================================================================
+File: C:\aishrink\modules\ingestion\compression.py
+================================================================================
+
+import zlib
+import logging
+from typing import Optional
+import numpy as np
+
+logger = logging.getLogger(__name__)
+
+class Compressor:
+    """
+    Handles data compression with multiple strategies.
+    Could be extended to use GPU acceleration or specialized compression.
+    """
+    
+    def __init__(self, compression_level: int = 6):
+        self.compression_level = compression_level
+        
+    def compress(self, data: bytes) -> bytes:
+        """Compress data using zlib"""
+        try:
+            return zlib.compress(data, level=self.compression_level)
+        except Exception as e:
+            logger.error(f"Compression failed: {e}")
+            return data
+            
+    def decompress(self, data: bytes) -> Optional[bytes]:
+        """Decompress zlib-compressed data"""
+        try:
+            return zlib.decompress(data)
+        except Exception as e:
+            logger.error(f"Decompression failed: {e}")
+            return None
+            
+    def compress_text(self, text: str) -> bytes:
+        """Compress text data"""
+        return self.compress(text.encode('utf-8'))
+        
+    def decompress_text(self, data: bytes) -> Optional[str]:
+        """Decompress to text"""
+        decompressed = self.decompress(data)
+        if decompressed is not None:
+            try:
+                return decompressed.decode('utf-8')
+            except UnicodeDecodeError as e:
+                logger.error(f"Failed to decode decompressed data: {e}")
+        return None
+
+class GPUCompressor(Compressor):
+    """
+    Placeholder for GPU-accelerated compression.
+    Would use CUDA or similar in production.
+    """
+    
+    def __init__(self):
+        super().__init__()
+        self.gpu_available = False
+        try:
+            # Check for GPU availability
+            import torch
+            self.gpu_available = torch.cuda.is_available()
+            if self.gpu_available:
+                logger.info("GPU compression enabled")
+        except ImportError:
+            logger.warning("torch not available, falling back to CPU compression")
+            
+    def compress(self, data: bytes) -> bytes:
+        if self.gpu_available:
+            # Placeholder for GPU compression
+            # In reality, would use CUDA kernels or GPU libraries
+            return super().compress(data)
+        return super().compress(data) 
+
+
+================================================================================
+File: C:\aishrink\modules\ingestion\dedup.py
+================================================================================
+
+import numpy as np
+import hashlib
+import uuid
+from typing import Tuple, Optional
+import logging
+from dataclasses import dataclass
+
+logger = logging.getLogger(__name__)
+
+@dataclass
+class ChunkInfo:
+    chunk_id: str
+    embedding: np.ndarray
+    signature: str
+
+class DeduplicationManager:
+    """Handles document deduplication using embeddings and LSH"""
+    
+    def __init__(self, config, embedding_model):
+        self.config = config
+        self.embedding_model = embedding_model
+        self.similarity_threshold = config["dedup"]["similarity_threshold"]
+        
+        # Store chunk info for deduplication
+        self.chunks: dict[str, ChunkInfo] = {}  # signature -> ChunkInfo
+        
+    def process_chunk(self, text: str) -> Tuple[bool, Optional[str], Optional[bytes]]:
+        """
+        Process a text chunk and determine if it's new.
+        Returns: (is_new, chunk_id, compressed_data)
+        """
+        try:
+            # Generate embedding
+            embedding = self.embedding_model.get_embedding(text)
+            
+            # Generate signature from embedding
+            signature = self._generate_signature(embedding)
+            
+            # Check if we've seen this signature
+            if signature in self.chunks:
+                logger.debug(f"Duplicate chunk found with signature {signature}")
+                return False, self.chunks[signature].chunk_id, None
+                
+            # New chunk - store it
+            chunk_id = str(uuid.uuid4())
+            self.chunks[signature] = ChunkInfo(
+                chunk_id=chunk_id,
+                embedding=embedding,
+                signature=signature
+            )
+            
+            # Compress the text (could be more sophisticated)
+            compressed = text.encode('utf-8')
+            
+            logger.debug(f"New chunk stored with ID {chunk_id}")
+            return True, chunk_id, compressed
+            
+        except Exception as e:
+            logger.error(f"Error processing chunk: {e}")
+            return False, None, None
+            
+    def _generate_signature(self, embedding: np.ndarray) -> str:
+        """Generate a signature from an embedding for quick comparison"""
+        # Simple approach: round embedding values and hash
+        rounded = np.round(embedding, decimals=2)
+        signature_input = ",".join(str(x) for x in rounded)
+        return hashlib.md5(signature_input.encode('utf-8')).hexdigest()
+        
+    def check_similarity(self, embedding1: np.ndarray, embedding2: np.ndarray) -> float:
+        """Compute cosine similarity between embeddings"""
+        return np.dot(embedding1, embedding2) / (
+            np.linalg.norm(embedding1) * np.linalg.norm(embedding2)
+        ) 
+
+
+================================================================================
+File: C:\aishrink\modules\ingestion\embeddings.py
+================================================================================
+
+import torch
+from transformers import AutoModel, AutoTokenizer
+import numpy as np
+from typing import Union
+import logging
+
+logger = logging.getLogger(__name__)
+
+class EmbeddingModel:
+    """Generates embeddings for text using a transformer model"""
+    
+    def __init__(self, model_name: str = "sentence-transformers/all-MiniLM-L6-v2"):
+        logger.info(f"Initializing embedding model: {model_name}")
+        
+        self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        logger.info(f"Using device: {self.device}")
+        
+        self.tokenizer = AutoTokenizer.from_pretrained(model_name)
+        self.model = AutoModel.from_pretrained(model_name).to(self.device)
+        self.model.eval()
+        
+        # Cache for storing embeddings
+        self.cache = {}
+        
+    def get_embedding(self, text: str) -> np.ndarray:
+        """Get embedding for a text string"""
+        # Check cache first
+        if text in self.cache:
+            return self.cache[text]
+            
+        try:
+            # Tokenize and prepare input
+            inputs = self.tokenizer(
+                text,
+                return_tensors="pt",
+                padding=True,
+                truncation=True,
+                max_length=512
+            ).to(self.device)
+            
+            # Generate embedding
+            with torch.no_grad():
+                outputs = self.model(**inputs)
+                
+            # Use mean pooling
+            attention_mask = inputs["attention_mask"]
+            token_embeddings = outputs.last_hidden_state
+            input_mask_expanded = attention_mask.unsqueeze(-1).expand(token_embeddings.size()).float()
+            embedding = torch.sum(token_embeddings * input_mask_expanded, 1) / torch.clamp(input_mask_expanded.sum(1), min=1e-9)
+            
+            # Convert to numpy and normalize
+            embedding = embedding[0].cpu().numpy()
+            embedding = embedding / np.linalg.norm(embedding)
+            
+            # Cache result
+            self.cache[text] = embedding
+            
+            return embedding
+            
+        except Exception as e:
+            logger.error(f"Error generating embedding: {e}")
+            # Return zero vector as fallback
+            return np.zeros(self.model.config.hidden_size) 
+
+
+================================================================================
+File: C:\aishrink\modules\knowledge_graph\conflict_resolution.py
+================================================================================
+
+from typing import Dict, Literal, Tuple
+import logging
+from dataclasses import dataclass
+from urllib.parse import urlparse
+
+logger = logging.getLogger(__name__)
+
+ResolutionType = Literal["keep_existing", "overwrite", "store_disputed"]
+
+@dataclass
+class ResolutionResult:
+    action: ResolutionType
+    final_confidence: float
+    reason: str = ""
+
+class ConflictResolver:
+    """
+    Handles conflicting edges in the knowledge graph based on confidence scores,
+    domain trust, and explicit bias configuration.
+    """
+    
+    def __init__(self, config):
+        self.config = config
+        self.conflict_policy = config["knowledge_graph"].get("conflict_policy", "store_disputed")
+        
+        # Load trust scores and bias overrides
+        kg_config = config["knowledge_graph"]
+        self.domain_trust_scores = kg_config.get("domain_trust_scores", {})
+        self.bias_overrides = kg_config.get("bias_overrides", {})
+        
+        # Extract official sources and domain boosts
+        self.official_sources = self.bias_overrides.get("official_sources", [])
+        self.domain_boost = self.bias_overrides.get("domain_boost", {})
+        
+        logger.info(f"Initialized ConflictResolver with {len(self.official_sources)} official sources")
+
+    def resolve_conflict(self, existing_edge: Dict, new_edge: Dict) -> ResolutionResult:
+        """
+        Determine how to handle conflicting edges based on confidence, trust, and bias.
+        Returns a ResolutionResult with action and final confidence.
+        """
+        if self.conflict_policy == "store_disputed":
+            return ResolutionResult(
+                action="store_disputed",
+                final_confidence=self._calculate_final_confidence(new_edge),
+                reason="Policy is set to store all disputed facts"
+            )
+
+        # Calculate final confidence scores
+        existing_final_conf = self._calculate_final_confidence(existing_edge)
+        new_final_conf = self._calculate_final_confidence(new_edge)
+
+        # Check for official truth override
+        if existing_edge.get("official_truth"):
+            if not self._is_official_source(new_edge.get("source", "")):
+                return ResolutionResult(
+                    action="keep_existing",
+                    final_confidence=existing_final_conf,
+                    reason="Existing edge is marked as official truth"
+                )
+
+        # Compare final confidence scores with threshold
+        threshold = 1.2  # Require 20% higher confidence to overwrite
+        if new_final_conf > existing_final_conf * threshold:
+            return ResolutionResult(
+                action="overwrite",
+                final_confidence=new_final_conf,
+                reason=f"New confidence ({new_final_conf:.2f}) significantly higher than existing ({existing_final_conf:.2f})"
+            )
+        else:
+            return ResolutionResult(
+                action="keep_existing",
+                final_confidence=existing_final_conf,
+                reason=f"New confidence ({new_final_conf:.2f}) not significantly higher than existing ({existing_final_conf:.2f})"
+            )
+
+    def _calculate_final_confidence(self, edge: Dict) -> float:
+        """Calculate final confidence score incorporating all factors"""
+        # Start with base confidence
+        confidence = edge.get("confidence", 0.5)
+        source = edge.get("source", "").lower()
+
+        # Apply domain trust
+        confidence *= self._get_domain_trust(source)
+
+        # Apply bias overrides
+        confidence = self._apply_bias_overrides(source, confidence)
+
+        # Cap at 1.0 unless it's an official source
+        if not self._is_official_source(source):
+            confidence = min(confidence, 1.0)
+
+        return confidence
+
+    def _get_domain_trust(self, source: str) -> float:
+        """Get trust score for a domain"""
+        try:
+            domain = self._extract_domain(source)
+            
+            # Check each known domain pattern
+            for known_domain, trust_score in self.domain_trust_scores.items():
+                if known_domain in domain:
+                    return trust_score
+                    
+            return 0.5  # Default trust score
+            
+        except Exception as e:
+            logger.warning(f"Error processing domain trust for {source}: {e}")
+            return 0.5
+
+    def _apply_bias_overrides(self, source: str, confidence: float) -> float:
+        """Apply additional bias multipliers from configuration"""
+        try:
+            domain = self._extract_domain(source)
+            original_confidence = confidence
+
+            # Apply domain-specific boost
+            for boost_domain, multiplier in self.domain_boost.items():
+                if boost_domain in domain:
+                    confidence *= multiplier
+                    logger.info(
+                        f"Applied domain boost: {boost_domain} ({multiplier}x) "
+                        f"to {domain} ({original_confidence:.2f} -> {confidence:.2f})"
+                    )
+                    break  # Only apply highest boost
+
+            # Apply official source multiplier
+            if self._is_official_source(domain):
+                original_confidence = confidence
+                confidence *= 2.0
+                logger.info(
+                    f"Applied official source boost to {domain} "
+                    f"({original_confidence:.2f} -> {confidence:.2f})"
+                )
+
+            return confidence
+
+        except Exception as e:
+            logger.warning(f"Error applying bias overrides for {source}: {e}")
+            return confidence
+
+    def _is_official_source(self, source: str) -> bool:
+        """Check if source is in the official sources list"""
+        domain = self._extract_domain(source)
+        return any(off_source in domain for off_source in self.official_sources)
+
+    def _extract_domain(self, source: str) -> str:
+        """Extract domain from source URL or return source if not a URL"""
+        try:
+            parsed = urlparse(source)
+            if parsed.netloc:
+                return parsed.netloc.lower()
+            return source.lower()
+        except Exception:
+            return source.lower() 
+
+
+================================================================================
+File: C:\aishrink\modules\knowledge_graph\entity_extraction.py
+================================================================================
+
+import spacy
+from typing import List, Dict, Any
+import logging
+from dataclasses import dataclass
+from collections import defaultdict
+
+logger = logging.getLogger(__name__)
+
+@dataclass
+class ExtractedFact:
+    entity1: str
+    relation: str
+    entity2: str
+    confidence: float
+    source: str
+
+class EntityExtractor:
+    """
+    Extracts entities and relationships from text using spaCy NLP.
+    """
+    
+    def __init__(self):
+        # Load English language model
+        try:
+            self.nlp = spacy.load("en_core_web_sm")
+            logger.info("Loaded spaCy model successfully")
+        except Exception as e:
+            logger.error(f"Failed to load spaCy model: {e}")
+            raise
+            
+        # Define relationship patterns
+        self.relation_patterns = [
+            {
+                "pattern": [{"POS": "PROPN"}, {"LEMMA": "acquire"}, {"POS": "PROPN"}],
+                "relation": "acquired"
+            },
+            {
+                "pattern": [{"POS": "PROPN"}, {"LEMMA": "invest"}, {"LOWER": "in"}, {"POS": "PROPN"}],
+                "relation": "invested_in"
+            },
+            {
+                "pattern": [{"POS": "PROPN"}, {"LEMMA": "be"}, {"POS": "DET"}, {"POS": "NOUN"}, {"LOWER": "of"}, {"POS": "PROPN"}],
+                "relation": "part_of"
+            }
+            # Add more patterns as needed
+        ]
+        
+        # Add patterns to matcher
+        self.matcher = spacy.matcher.Matcher(self.nlp.vocab)
+        for i, pattern in enumerate(self.relation_patterns):
+            self.matcher.add(f"pattern_{i}", [pattern["pattern"]])
+
+    def extract_entities(self, text: str, source: str = "unknown") -> List[Dict[str, Any]]:
+        """
+        Extract entity relationships from text.
+        Returns list of dicts with {entity1, relation, entity2, confidence, source}
+        """
+        try:
+            # Process text with spaCy
+            doc = self.nlp(text)
+            
+            # Extract facts using different methods
+            facts = []
+            facts.extend(self._extract_from_patterns(doc, source))
+            facts.extend(self._extract_from_dependencies(doc, source))
+            
+            return facts
+            
+        except Exception as e:
+            logger.error(f"Error extracting entities: {e}")
+            return []
+
+    def _extract_from_patterns(self, doc, source: str) -> List[Dict[str, Any]]:
+        """Extract facts using predefined patterns"""
+        facts = []
+        matches = self.matcher(doc)
+        
+        for match_id, start, end in matches:
+            pattern_name = self.nlp.vocab.strings[match_id]
+            pattern_index = int(pattern_name.split("_")[1])
+            relation = self.relation_patterns[pattern_index]["relation"]
+            
+            span = doc[start:end]
+            entities = [token for token in span if token.pos_ == "PROPN"]
+            
+            if len(entities) >= 2:
+                facts.append({
+                    "entity1": entities[0].text,
+                    "relation": relation,
+                    "entity2": entities[-1].text,
+                    "confidence": 0.8,  # Pattern-based confidence
+                    "source": source
+                })
+        
+        return facts
+
+    def _extract_from_dependencies(self, doc, source: str) -> List[Dict[str, Any]]:
+        """Extract facts using dependency parsing"""
+        facts = []
+        
+        for token in doc:
+            # Look for subject-verb-object patterns
+            if token.dep_ == "nsubj" and token.head.pos_ == "VERB":
+                subject = token
+                verb = token.head
+                
+                # Find object
+                for child in verb.children:
+                    if child.dep_ in ["dobj", "pobj"]:
+                        # Only consider named entities
+                        if subject.ent_type_ and child.ent_type_:
+                            facts.append({
+                                "entity1": subject.text,
+                                "relation": verb.lemma_,
+                                "entity2": child.text,
+                                "confidence": 0.6,  # Dependency-based confidence
+                                "source": source
+                            })
+        
+        return facts
+
+    def _clean_entity(self, text: str) -> str:
+        """Clean and normalize entity text"""
+        return text.strip()
+
+    def _get_relation_confidence(self, relation: str, context_size: int) -> float:
+        """
+        Calculate confidence score for a relation based on various factors
+        """
+        # Base confidence
+        confidence = 0.5
+        
+        # Adjust based on context size
+        if context_size > 100:
+            confidence += 0.2
+            
+        # Adjust based on relation type
+        if relation in ["acquired", "invested_in", "part_of"]:
+            confidence += 0.2
+            
+        return min(confidence, 1.0) 
+
+
+================================================================================
+File: C:\aishrink\modules\knowledge_graph\graph_manager.py
+================================================================================
+
+from neo4j import GraphDatabase
+from typing import List, Dict, Any
+import logging
+from ..monitoring.metrics import (
+    RELATIONSHIPS_CREATED, CONFLICTS_RESOLVED, 
+    TRUTH_CONFIDENCE
+)
+from .shard_manager import ShardManager
+from ..messaging.message_bus import MessageBus
+
+logger = logging.getLogger(__name__)
+
+class KnowledgeGraphManager:
+    """Manages interactions with the Neo4j knowledge graph database"""
+    
+    def __init__(self, config):
+        self.config = config
+        self.uri = config["knowledge_graph"]["neo4j_uri"]
+        self.user = config["knowledge_graph"]["neo4j_user"]
+        self.password = config["knowledge_graph"]["neo4j_password"]
+        
+        try:
+            self.driver = GraphDatabase.driver(
+                self.uri, 
+                auth=(self.user, self.password)
+            )
+            logger.info("Successfully connected to Neo4j database")
+        except Exception as e:
+            logger.error(f"Failed to connect to Neo4j: {e}")
+            raise
+
+        self.shard_manager = ShardManager(config, config["node"]["id"])
+        self.message_bus = MessageBus(config)
+        
+        # Subscribe to cross-shard updates
+        self.message_bus.subscribe("kg_updates", self._handle_remote_update)
+
+    def insert_relationships(self, facts: List[Dict[str, Any]], conflict_resolver) -> None:
+        """Insert relationships, handling sharding"""
+        local_facts = []
+        remote_facts = {}
+        
+        # Sort facts by shard
+        for fact in facts:
+            entity1 = fact["entity1"]
+            entity2 = fact["entity2"]
+            
+            # If either entity belongs to another shard, queue for forwarding
+            shard1 = self.shard_manager.get_shard_for_entity(entity1)
+            shard2 = self.shard_manager.get_shard_for_entity(entity2)
+            
+            if shard1.node_id != self.shard_manager.node_id:
+                remote_facts.setdefault(shard1.node_id, []).append(fact)
+            elif shard2.node_id != self.shard_manager.node_id:
+                remote_facts.setdefault(shard2.node_id, []).append(fact)
+            else:
+                local_facts.append(fact)
+        
+        # Process local facts
+        if local_facts:
+            self._process_local_facts(local_facts, conflict_resolver)
+        
+        # Forward remote facts
+        for node_id, node_facts in remote_facts.items():
+            self.message_bus.publish("kg_updates", {
+                "target_node": node_id,
+                "facts": node_facts
+            })
+
+    def _process_local_facts(self, facts: List[Dict], conflict_resolver) -> None:
+        """Process facts that belong to this shard"""
+        with self.driver.session() as session:
+            for fact in facts:
+                try:
+                    self._process_fact(session, fact, conflict_resolver)
+                except Exception as e:
+                    logger.error(f"Error processing fact {fact}: {e}")
+
+    def _process_fact(self, session, fact: Dict[str, Any], conflict_resolver) -> None:
+        """Process a single fact, handling conflicts"""
+        entity1 = fact["entity1"]
+        relation = fact["relation"]
+        entity2 = fact["entity2"]
+        confidence = fact.get("confidence", 1.0)
+        source = fact.get("source", "unknown")
+
+        # Check for existing relationship
+        existing = session.run(
+            """
+            MATCH (a:Entity {name: $e1})-[r:`%s`]->(b:Entity {name: $e2})
+            RETURN r
+            """ % relation,
+            e1=entity1, e2=entity2
+        ).single()
+
+        if existing and existing["r"]:
+            # Handle conflict
+            resolution = conflict_resolver.resolve_conflict(
+                existing_edge={
+                    "confidence": existing["r"]["confidence"],
+                    "source": existing["r"].get("source", "unknown"),
+                    "official_truth": existing["r"].get("official_truth", False)
+                },
+                new_edge={
+                    "confidence": confidence,
+                    "source": source
+                }
+            )
+
+            if resolution.action == "overwrite":
+                self._update_relationship(
+                    session, 
+                    entity1, 
+                    relation, 
+                    entity2, 
+                    resolution.final_confidence, 
+                    source,
+                    resolution.reason
+                )
+            elif resolution.action == "store_disputed":
+                self._store_disputed_relationship(
+                    session,
+                    entity1,
+                    relation,
+                    entity2,
+                    resolution.final_confidence,
+                    source,
+                    resolution.reason
+                )
+        else:
+            # Create new relationship
+            self._create_relationship(session, entity1, relation, entity2, confidence, source)
+
+        CONFLICTS_RESOLVED.labels(
+            resolution_type=resolution.action
+        ).inc()
+        
+        if resolution.action in ["overwrite", "store_disputed"]:
+            RELATIONSHIPS_CREATED.inc()
+            TRUTH_CONFIDENCE.observe(resolution.final_confidence)
+
+    def _create_relationship(self, session, entity1: str, relation: str, entity2: str, 
+                           confidence: float, source: str) -> None:
+        """Create a new relationship between entities"""
+        session.run(
+            """
+            MERGE (a:Entity {name: $e1})
+            MERGE (b:Entity {name: $e2})
+            CREATE (a)-[r:`%s` {
+                confidence: $conf,
+                source: $source,
+                timestamp: timestamp()
+            }]->(b)
+            """ % relation,
+            e1=entity1, e2=entity2, conf=confidence, source=source
+        )
+
+    def _update_relationship(self, session, entity1: str, relation: str, entity2: str,
+                           confidence: float, source: str, reason: str = "") -> None:
+        """Update an existing relationship with new confidence and metadata"""
+        session.run(
+            """
+            MATCH (a:Entity {name: $e1})-[r:`%s`]->(b:Entity {name: $e2})
+            SET r.confidence = $conf,
+                r.truth_confidence = $conf,
+                r.source = $source,
+                r.update_reason = $reason,
+                r.updated_at = timestamp()
+            """ % relation,
+            e1=entity1, e2=entity2, conf=confidence, source=source, reason=reason
+        )
+
+    def _store_disputed_relationship(self, session, entity1: str, relation: str, entity2: str,
+                                   confidence: float, source: str, reason: str = "") -> None:
+        """Store a disputed version of a relationship with metadata"""
+        session.run(
+            """
+            MATCH (a:Entity {name: $e1}), (b:Entity {name: $e2})
+            CREATE (a)-[r:`%s` {
+                confidence: $conf,
+                source: $source,
+                disputed: true,
+                update_reason: $reason,
+                timestamp: timestamp()
+            }]->(b)
+            """ % relation,
+            e1=entity1, e2=entity2, conf=confidence, source=source, reason=reason
+        )
+
+    def mark_as_official_truth(self, entity1: str, relation: str, entity2: str, admin_id: str) -> bool:
+        """Mark a relationship as official truth (admin only)"""
+        try:
+            with self.driver.session() as session:
+                result = session.run(
+                    """
+                    MATCH (a:Entity {name: $e1})-[r:`%s`]->(b:Entity {name: $e2})
+                    SET r.official_truth = true,
+                        r.official_truth_by = $admin_id,
+                        r.official_truth_at = timestamp()
+                    RETURN r
+                    """ % relation,
+                    e1=entity1, e2=entity2, admin_id=admin_id
+                )
+                return bool(result.single())
+        except Exception as e:
+            logger.error(f"Error marking relationship as official truth: {e}")
+            return False
+
+    def close(self):
+        """Close the database connection"""
+        self.driver.close()
+
+    def _handle_remote_update(self, message: Dict):
+        """Handle updates forwarded from other shards"""
+        if message.get("target_node") != self.shard_manager.node_id:
+            return
+            
+        facts = message.get("facts", [])
+        if facts:
+            self.insert_relationships(facts, self.conflict_resolver) 
+
+
+================================================================================
+File: C:\aishrink\modules\knowledge_graph\shard_manager.py
+================================================================================
+
+import hashlib
+from typing import List, Dict, Optional
+import logging
+from dataclasses import dataclass
+
+logger = logging.getLogger(__name__)
+
+@dataclass
+class ShardInfo:
+    node_id: str
+    shard_range: tuple[int, int]  # (start, end) of hash range
+    host: str
+    port: int
+
+class ShardManager:
+    """Manages the distribution of entities across shards"""
+    
+    def __init__(self, config, node_id: str):
+        self.config = config
+        self.node_id = node_id
+        self.shard_map: Dict[str, ShardInfo] = {}
+        self.hash_range = 2**32  # Use 32-bit hash space
+        
+        # Load shard configuration
+        self._load_shard_config()
+        
+        # Get our shard range
+        self.our_shard = self.shard_map.get(node_id)
+        if not self.our_shard:
+            logger.error(f"No shard configuration found for node {node_id}")
+            raise ValueError(f"Missing shard config for node {node_id}")
+
+    def _load_shard_config(self):
+        """Load shard configuration from config file"""
+        shard_config = self.config.get("sharding", {}).get("nodes", {})
+        total_nodes = len(shard_config)
+        if total_nodes == 0:
+            logger.warning("No shard configuration found, defaulting to single node")
+            # Default to single node handling full range
+            self.shard_map[self.node_id] = ShardInfo(
+                node_id=self.node_id,
+                shard_range=(0, self.hash_range),
+                host="localhost",
+                port=7687
+            )
+            return
+
+        # Calculate shard ranges
+        range_size = self.hash_range // total_nodes
+        for i, (node_id, node_config) in enumerate(shard_config.items()):
+            start = i * range_size
+            end = start + range_size if i < total_nodes - 1 else self.hash_range
+            
+            self.shard_map[node_id] = ShardInfo(
+                node_id=node_id,
+                shard_range=(start, end),
+                host=node_config["host"],
+                port=node_config["port"]
+            )
+
+    def get_shard_for_entity(self, entity_id: str) -> ShardInfo:
+        """Determine which shard should store this entity"""
+        hash_value = self._hash_entity(entity_id)
+        
+        for shard in self.shard_map.values():
+            if shard.shard_range[0] <= hash_value < shard.shard_range[1]:
+                return shard
+                
+        # Should never happen with proper ranges
+        raise ValueError(f"No shard found for hash value {hash_value}")
+
+    def should_handle_entity(self, entity_id: str) -> bool:
+        """Check if this node should handle the given entity"""
+        shard = self.get_shard_for_entity(entity_id)
+        return shard.node_id == self.node_id
+
+    def _hash_entity(self, entity_id: str) -> int:
+        """Create consistent hash for entity ID"""
+        hash_obj = hashlib.md5(entity_id.encode())
+        # Use first 4 bytes as 32-bit integer
+        return int.from_bytes(hash_obj.digest()[:4], byteorder='big')
+
+    def get_all_shards(self) -> List[ShardInfo]:
+        """Get information about all shards"""
+        return list(self.shard_map.values())
+
+    def get_neighbor_shards(self) -> List[ShardInfo]:
+        """Get information about other shards"""
+        return [shard for shard in self.shard_map.values() 
+                if shard.node_id != self.node_id] 
+
+
+================================================================================
+File: C:\aishrink\modules\logging\log_config.py
+================================================================================
+
+import structlog
+import logging.config
+import sys
+from pythonjsonlogger import jsonlogger
+
+def configure_logging(log_level="INFO"):
+    """Configure structured logging"""
+    
+    # Configure processors for structlog
+    processors = [
+        structlog.stdlib.filter_by_level,
+        structlog.stdlib.add_logger_name,
+        structlog.stdlib.add_log_level,
+        structlog.stdlib.PositionalArgumentsFormatter(),
+        structlog.processors.TimeStamper(fmt="iso"),
+        structlog.processors.StackInfoRenderer(),
+        structlog.processors.format_exc_info,
+        structlog.processors.UnicodeDecoder(),
+        structlog.processors.JSONRenderer()
+    ]
+
+    structlog.configure(
+        processors=processors,
+        context_class=dict,
+        logger_factory=structlog.stdlib.LoggerFactory(),
+        wrapper_class=structlog.stdlib.BoundLogger,
+        cache_logger_on_first_use=True,
+    )
+
+    # Configure standard logging to use JSON format
+    handler = logging.StreamHandler(sys.stdout)
+    handler.setFormatter(jsonlogger.JsonFormatter(
+        fmt='%(asctime)s %(name)s %(levelname)s %(message)s'
+    ))
+
+    logging.config.dictConfig({
+        'version': 1,
+        'disable_existing_loggers': False,
+        'formatters': {
+            'json': {
+                '()': jsonlogger.JsonFormatter,
+                'fmt': '%(asctime)s %(name)s %(levelname)s %(message)s'
+            }
+        },
+        'handlers': {
+            'console': {
+                'class': 'logging.StreamHandler',
+                'formatter': 'json',
+                'stream': sys.stdout
+            }
+        },
+        'loggers': {
+            '': {
+                'handlers': ['console'],
+                'level': log_level
+            }
+        }
+    })
+
+    return structlog.get_logger() 
+
+
+================================================================================
+File: C:\aishrink\modules\logging\request_logging.py
+================================================================================
+
+import structlog
+import time
+from typing import Callable, Awaitable
+from aiohttp import web
+
+logger = structlog.get_logger()
+
+@web.middleware
+async def request_logging_middleware(request: web.Request, 
+                                   handler: Callable[[web.Request], Awaitable[web.Response]]) -> web.Response:
+    """Log request details and timing"""
+    start_time = time.time()
+    
+    request_id = request.headers.get('X-Request-ID', '-')
+    
+    log = logger.bind(
+        request_id=request_id,
+        method=request.method,
+        path=request.path,
+        remote=request.remote
+    )
+    
+    log.info("request_started")
+    
+    try:
+        response = await handler(request)
+        duration = time.time() - start_time
+        
+        log.info("request_completed",
+                 status=response.status,
+                 duration=duration)
+        
+        return response
+        
+    except Exception as e:
+        duration = time.time() - start_time
+        log.error("request_failed",
+                  error_type=type(e).__name__,
+                  error=str(e),
+                  duration=duration)
+        raise 
+
+
+================================================================================
+File: C:\aishrink\modules\messaging\message_bus.py
+================================================================================
+
+import zmq
+import json
+import threading
+import logging
+from typing import Callable, Dict, Any
+from dataclasses import dataclass
+import uuid
+
+logger = logging.getLogger(__name__)
+
+@dataclass
+class Message:
+    topic: str
+    payload: Dict[str, Any]
+    message_id: str = None
+    sender_id: str = None
+    
+    def __post_init__(self):
+        if not self.message_id:
+            self.message_id = str(uuid.uuid4())
+
+class MessageBus:
+    """
+    Handles peer-to-peer communication using ZeroMQ PUB/SUB pattern
+    """
+    
+    def __init__(self, config):
+        self.config = config
+        self.node_id = config["node"]["id"]
+        
+        # Initialize ZMQ context
+        self.context = zmq.Context()
+        
+        # Publisher socket
+        self.pub_socket = self.context.socket(zmq.PUB)
+        self.pub_port = self._bind_to_random_port(self.pub_socket)
+        
+        # Subscriber socket
+        self.sub_socket = self.context.socket(zmq.SUB)
+        
+        # Callbacks for message topics
+        self.callbacks: Dict[str, Callable] = {}
+        
+        # Track seen message IDs to prevent duplicates
+        self.seen_messages = set()
+        
+        # Start listener thread
+        self.running = True
+        self.listener_thread = threading.Thread(target=self._listen_loop, daemon=True)
+        self.listener_thread.start()
+        
+        logger.info(f"MessageBus initialized for node {self.node_id} on port {self.pub_port}")
+
+    def _bind_to_random_port(self, socket, min_port=49152, max_port=65535):
+        """Bind socket to random available port"""
+        while True:
+            try:
+                port = socket.bind_to_random_port(
+                    "tcp://*",
+                    min_port=min_port,
+                    max_port=max_port
+                )
+                return port
+            except zmq.ZMQError as e:
+                logger.warning(f"Failed to bind to port: {e}")
+                continue
+
+    def connect_to_peer(self, peer_address: str):
+        """Connect subscriber socket to a peer's publisher"""
+        try:
+            self.sub_socket.connect(f"tcp://{peer_address}")
+            logger.info(f"Connected to peer at {peer_address}")
+        except Exception as e:
+            logger.error(f"Failed to connect to peer {peer_address}: {e}")
+
+    def subscribe(self, topic: str, callback: Callable):
+        """Subscribe to a topic with callback"""
+        try:
+            # Subscribe to topic
+            self.sub_socket.setsockopt_string(zmq.SUBSCRIBE, topic)
+            
+            # Store callback
+            self.callbacks[topic] = callback
+            logger.debug(f"Subscribed to topic: {topic}")
+            
+        except Exception as e:
+            logger.error(f"Error subscribing to {topic}: {e}")
+
+    def publish(self, topic: str, data: Dict[str, Any]):
+        """Publish message to topic"""
+        try:
+            message = Message(
+                topic=topic,
+                payload=data,
+                sender_id=self.node_id
+            )
+            
+            # Serialize message
+            msg_str = f"{topic} {json.dumps(message.__dict__)}"
+            
+            # Send
+            self.pub_socket.send_string(msg_str)
+            logger.debug(f"Published message to topic {topic}")
+            
+        except Exception as e:
+            logger.error(f"Error publishing to {topic}: {e}")
+
+    def _listen_loop(self):
+        """Background thread to listen for messages"""
+        while self.running:
+            try:
+                # Receive message with timeout
+                if self.sub_socket.poll(timeout=1000):
+                    msg_str = self.sub_socket.recv_string()
+                    self._handle_message(msg_str)
+            except Exception as e:
+                logger.error(f"Error in listener loop: {e}")
+                continue
+
+    def _handle_message(self, msg_str: str):
+        """Process received message"""
+        try:
+            # Parse topic and payload
+            topic, json_str = msg_str.split(" ", 1)
+            message = json.loads(json_str)
+            
+            # Skip if we've seen this message
+            if message["message_id"] in self.seen_messages:
+                return
+                
+            # Skip messages from self
+            if message["sender_id"] == self.node_id:
+                return
+                
+            # Mark message as seen
+            self.seen_messages.add(message["message_id"])
+            
+            # Call topic callback if exists
+            if topic in self.callbacks:
+                self.callbacks[topic](message["payload"])
+                
+        except Exception as e:
+            logger.error(f"Error handling message: {e}")
+
+    def close(self):
+        """Clean shutdown"""
+        self.running = False
+        if self.listener_thread.is_alive():
+            self.listener_thread.join(timeout=1.0)
+        self.pub_socket.close()
+        self.sub_socket.close()
+        self.context.term() 
+
+
+================================================================================
+File: C:\aishrink\modules\messaging\p2p_node.py
+================================================================================
+
+import time
+import random
+from typing import Set, Dict, Any
+import logging
+from dataclasses import dataclass
+import json
+
+logger = logging.getLogger(__name__)
+
+@dataclass
+class PeerInfo:
+    node_id: str
+    address: str
+    last_seen: float
+    
+class P2PNode:
+    """
+    Manages peer discovery and maintains connections in the P2P network
+    """
+    
+    def __init__(self, config, message_bus):
+        self.config = config
+        self.message_bus = message_bus
+        self.node_id = config["node"]["id"]
+        
+        # Known peers
+        self.peers: Dict[str, PeerInfo] = {}
+        
+        # Subscribe to peer discovery messages
+        self.message_bus.subscribe("peer_discovery", self._handle_peer_discovery)
+        self.message_bus.subscribe("peer_announce", self._handle_peer_announce)
+        
+        # Start periodic peer discovery
+        self._start_discovery()
+        
+    def _start_discovery(self):
+        """Start periodic peer discovery process"""
+        import threading
+        self.discovery_thread = threading.Thread(target=self._discovery_loop, daemon=True)
+        self.discovery_thread.start()
+        
+    def _discovery_loop(self):
+        """Periodically announce presence and clean up stale peers"""
+        while True:
+            try:
+                # Announce ourselves
+                self._announce_presence()
+                
+                # Clean up stale peers
+                self._cleanup_peers()
+                
+                # Sleep for random interval (5-10 seconds)
+                time.sleep(5 + random.random() * 5)
+                
+            except Exception as e:
+                logger.error(f"Error in discovery loop: {e}")
+                time.sleep(5)  # Back off on error
+                
+    def _announce_presence(self):
+        """Announce our presence to the network"""
+        announcement = {
+            "node_id": self.node_id,
+            "address": f"127.0.0.1:{self.message_bus.pub_port}",  # In real usage, get actual IP
+            "timestamp": time.time()
+        }
+        self.message_bus.publish("peer_announce", announcement)
+        
+    def _handle_peer_announce(self, message: Dict[str, Any]):
+        """Handle peer announcement message"""
+        try:
+            node_id = message["node_id"]
+            address = message["address"]
+            timestamp = message["timestamp"]
+            
+            # Skip if it's our own announcement
+            if node_id == self.node_id:
+                return
+                
+            # Update peer info
+            self.peers[node_id] = PeerInfo(
+                node_id=node_id,
+                address=address,
+                last_seen=timestamp
+            )
+            
+            # Connect to new peer if we haven't already
+            self.message_bus.connect_to_peer(address)
+            
+        except Exception as e:
+            logger.error(f"Error handling peer announcement: {e}")
+            
+    def _handle_peer_discovery(self, message: Dict[str, Any]):
+        """Handle peer discovery request"""
+        try:
+            # Respond with our peer list
+            response = {
+                "node_id": self.node_id,
+                "peers": [
+                    {
+                        "node_id": p.node_id,
+                        "address": p.address
+                    }
+                    for p in self.peers.values()
+                ]
+            }
+            self.message_bus.publish("peer_discovery_response", response)
+            
+        except Exception as e:
+            logger.error(f"Error handling peer discovery: {e}")
+            
+    def _cleanup_peers(self):
+        """Remove peers that haven't been seen recently"""
+        current_time = time.time()
+        stale_timeout = 60  # 60 seconds
+        
+        stale_peers = [
+            node_id for node_id, peer in self.peers.items()
+            if current_time - peer.last_seen > stale_timeout
+        ]
+        
+        for node_id in stale_peers:
+            logger.info(f"Removing stale peer {node_id}")
+            del self.peers[node_id]
+            
+    def get_peer_count(self) -> int:
+        """Get number of active peers"""
+        return len(self.peers)
+        
+    def get_peer_addresses(self) -> Set[str]:
+        """Get set of peer addresses"""
+        return {peer.address for peer in self.peers.values()} 
+
+
+================================================================================
+File: C:\aishrink\modules\monitoring\component_metrics.py
+================================================================================
+
+from prometheus_client import Counter, Gauge, Histogram, Summary
+import time
+
+# Crawler Metrics
+PAGES_CRAWLED = Counter('pages_crawled_total', 'Number of pages crawled')
+CRAWL_ERRORS = Counter('crawl_errors_total', 'Number of crawl errors', ['error_type'])
+CRAWL_DURATION = Histogram('crawl_duration_seconds', 'Time spent crawling pages')
+URL_QUEUE_SIZE = Gauge('url_queue_size', 'Number of URLs in the frontier')
+BYTES_DOWNLOADED = Counter('bytes_downloaded_total', 'Total bytes downloaded')
+
+# Content Processing Metrics
+CHUNKS_PROCESSED = Counter('chunks_processed_total', 'Number of text chunks processed')
+DUPLICATE_CHUNKS = Counter('duplicate_chunks_total', 'Number of duplicate chunks detected')
+COMPRESSION_RATIO = Histogram('compression_ratio', 'Compression ratio of processed chunks')
+ENTITY_EXTRACTION_TIME = Summary('entity_extraction_seconds', 'Time spent extracting entities')
+
+# Knowledge Graph Metrics
+RELATIONSHIPS_CREATED = Counter('relationships_created_total', 'Number of relationships created')
+CONFLICTS_RESOLVED = Counter('conflicts_resolved_total', 'Number of conflicts resolved', ['resolution_type'])
+TRUTH_CONFIDENCE = Histogram('truth_confidence', 'Distribution of truth confidence scores')
+GRAPH_SIZE = Gauge('graph_size', 'Total number of relationships in graph')
+SHARD_OPERATIONS = Counter('shard_operations_total', 'Number of cross-shard operations', ['operation_type'])
+
+# P2P Network Metrics
+MESSAGES_SENT = Counter('messages_sent_total', 'Number of P2P messages sent', ['message_type'])
+MESSAGES_RECEIVED = Counter('messages_received_total', 'Number of P2P messages received', ['message_type'])
+PEER_COUNT = Gauge('peer_count', 'Number of connected peers')
+MESSAGE_SIZE = Histogram('message_size_bytes', 'Size of P2P messages')
+
+# System Metrics
+MEMORY_USAGE = Gauge('memory_usage_bytes', 'Memory usage in bytes')
+CPU_USAGE = Gauge('cpu_usage_percent', 'CPU usage percentage')
+DISK_IO = Counter('disk_io_bytes_total', 'Disk I/O bytes', ['operation'])
+GC_TIME = Histogram('gc_duration_seconds', 'Garbage Collection duration')
+
+class MetricsMiddleware:
+    """Middleware to track timing and metrics of operations"""
+    
+    @staticmethod
+    def track_operation(metric):
+        """Decorator to track operation timing"""
+        def decorator(func):
+            async def wrapper(*args, **kwargs):
+                start_time = time.time()
+                try:
+                    result = await func(*args, **kwargs)
+                    duration = time.time() - start_time
+                    metric.observe(duration)
+                    return result
+                except Exception as e:
+                    CRAWL_ERRORS.labels(error_type=type(e).__name__).inc()
+                    raise
+            return wrapper
+        return decorator
+
+    @staticmethod
+    def track_size(metric):
+        """Decorator to track data size"""
+        def decorator(func):
+            async def wrapper(*args, **kwargs):
+                result = await func(*args, **kwargs)
+                if result:
+                    try:
+                        size = len(str(result).encode('utf-8'))
+                        metric.observe(size)
+                    except:
+                        pass
+                return result
+            return wrapper
+        return decorator 
+
+
+================================================================================
+File: C:\aishrink\modules\monitoring\metrics.py
+================================================================================
+
+from prometheus_client import Counter, Gauge, Histogram
+import time
+
+# Crawler metrics
+PAGES_CRAWLED = Counter('pages_crawled_total', 'Number of pages crawled')
+CRAWL_ERRORS = Counter('crawl_errors_total', 'Number of crawl errors', ['error_type'])
+CRAWL_DURATION = Histogram('crawl_duration_seconds', 'Time spent crawling pages')
+FRONTIER_SIZE = Gauge('frontier_size', 'Number of URLs in frontier')
+URLS_EXTRACTED = Counter('urls_extracted_total', 'Number of URLs extracted from pages')
+
+# Content processing metrics
+CHUNKS_PROCESSED = Counter('chunks_processed_total', 'Number of text chunks processed')
+DUPLICATE_CHUNKS = Counter('duplicate_chunks_total', 'Number of duplicate chunks detected')
+COMPRESSION_RATIO = Histogram('compression_ratio', 'Compression ratio of processed chunks')
+
+# Knowledge graph metrics
+FACTS_EXTRACTED = Counter('facts_extracted_total', 'Number of facts extracted')
+RELATIONSHIPS_CREATED = Counter('relationships_created_total', 'Number of relationships created')
+CONFLICTS_RESOLVED = Counter('conflicts_resolved_total', 'Number of conflicts resolved', ['resolution_type'])
+TRUTH_CONFIDENCE = Histogram('truth_confidence', 'Distribution of truth confidence scores')
+
+# P2P metrics
+MESSAGES_SENT = Counter('messages_sent_total', 'Number of P2P messages sent', ['message_type'])
+MESSAGES_RECEIVED = Counter('messages_received_total', 'Number of P2P messages received', ['message_type'])
+PEER_COUNT = Gauge('peer_count', 'Number of connected peers')
+
+# System metrics
+MEMORY_USAGE = Gauge('memory_usage_bytes', 'Memory usage in bytes')
+CPU_USAGE = Gauge('cpu_usage_percent', 'CPU usage percentage')
+
+class MetricsMiddleware:
+    """Middleware to track timing of operations"""
+    
+    @staticmethod
+    async def track_crawl_time(func):
+        """Decorator to track crawl time"""
+        async def wrapper(*args, **kwargs):
+            start_time = time.time()
+            try:
+                result = await func(*args, **kwargs)
+                CRAWL_DURATION.observe(time.time() - start_time)
+                return result
+            except Exception as e:
+                CRAWL_ERRORS.labels(error_type=type(e).__name__).inc()
+                raise
+        return wrapper
+
+    @staticmethod
+    def track_fact_extraction(func):
+        """Decorator to track fact extraction"""
+        def wrapper(*args, **kwargs):
+            try:
+                facts = func(*args, **kwargs)
+                if facts:
+                    FACTS_EXTRACTED.inc(len(facts))
+                return facts
+            except Exception as e:
+                CRAWL_ERRORS.labels(error_type=type(e).__name__).inc()
+                raise
+        return wrapper 
+
+
+================================================================================
+File: C:\aishrink\modules\monitoring\metrics_server.py
+================================================================================
+
+from aiohttp import web
+from prometheus_client import generate_latest, CONTENT_TYPE_LATEST
+import psutil
+import asyncio
+from .metrics import MEMORY_USAGE, CPU_USAGE
+from ..logging.request_logging import request_logging_middleware
+
+class MetricsServer:
+    def __init__(self, host="0.0.0.0", port=8000):
+        self.host = host
+        self.port = port
+        self.app = web.Application(middlewares=[request_logging_middleware])
+        self.app.router.add_get('/metrics', self.metrics_handler)
+        self.runner = None
+
+    async def metrics_handler(self, request):
+        """Handle /metrics requests from Prometheus"""
+        # Update system metrics
+        MEMORY_USAGE.set(psutil.Process().memory_info().rss)
+        CPU_USAGE.set(psutil.Process().cpu_percent())
+        
+        # Generate metrics response
+        metrics_data = generate_latest()
+        return web.Response(
+            body=metrics_data,
+            content_type=CONTENT_TYPE_LATEST
+        )
+
+    async def start(self):
+        """Start the metrics server"""
+        self.runner = web.AppRunner(self.app)
+        await self.runner.setup()
+        site = web.TCPSite(self.runner, self.host, self.port)
+        await site.start()
+        
+    async def stop(self):
+        """Stop the metrics server"""
+        if self.runner:
+            await self.runner.cleanup() 
+
+
+================================================================================
+File: C:\aishrink\modules\security\access_control.py
+================================================================================
+
+from typing import Set, Dict, Optional
+import logging
+from dataclasses import dataclass
+import time
+import jwt
+from datetime import datetime, timedelta
+
+logger = logging.getLogger(__name__)
+
+@dataclass
+class UserRole:
+    name: str
+    permissions: Set[str]
+
+@dataclass
+class User:
+    id: str
+    username: str
+    roles: Set[str]
+    active: bool = True
+
+class AccessControl:
+    """
+    Manages role-based access control and permissions
+    """
+    
+    def __init__(self, config):
+        self.config = config
+        
+        # Initialize roles and permissions
+        self.roles: Dict[str, UserRole] = self._init_roles()
+        
+        # User storage
+        self.users: Dict[str, User] = {}
+        
+        # JWT settings
+        self.jwt_secret = config["security"].get("jwt_secret", "your-secret-key")
+        self.token_expiry = timedelta(hours=24)
+        
+    def _init_roles(self) -> Dict[str, UserRole]:
+        """Initialize role definitions"""
+        return {
+            "admin": UserRole(
+                name="admin",
+                permissions={
+                    "read:all", "write:all", "delete:all", "manage:users"
+                }
+            ),
+            "crawler": UserRole(
+                name="crawler",
+                permissions={
+                    "read:urls", "write:urls", "read:content", "write:content"
+                }
+            ),
+            "analyst": UserRole(
+                name="analyst",
+                permissions={
+                    "read:content", "read:analytics", "write:analytics"
+                }
+            )
+        }
+
+    def add_user(self, user_id: str, username: str, roles: Set[str]) -> bool:
+        """Add a new user"""
+        try:
+            # Validate roles
+            for role in roles:
+                if role not in self.roles:
+                    logger.error(f"Invalid role: {role}")
+                    return False
+            
+            self.users[user_id] = User(
+                id=user_id,
+                username=username,
+                roles=roles
+            )
+            return True
+            
+        except Exception as e:
+            logger.error(f"Error adding user: {e}")
+            return False
+
+    def check_permission(self, user_id: str, permission: str) -> bool:
+        """Check if user has a specific permission"""
+        try:
+            user = self.users.get(user_id)
+            if not user or not user.active:
+                return False
+                
+            # Get all permissions from user's roles
+            user_permissions = set()
+            for role_name in user.roles:
+                role = self.roles.get(role_name)
+                if role:
+                    user_permissions.update(role.permissions)
+                    
+            return permission in user_permissions
+            
+        except Exception as e:
+            logger.error(f"Error checking permission: {e}")
+            return False
+
+    def generate_token(self, user_id: str) -> Optional[str]:
+        """Generate JWT token for user"""
+        try:
+            user = self.users.get(user_id)
+            if not user or not user.active:
+                return None
+                
+            payload = {
+                "user_id": user_id,
+                "username": user.username,
+                "roles": list(user.roles),
+                "exp": datetime.utcnow() + self.token_expiry
+            }
+            
+            return jwt.encode(payload, self.jwt_secret, algorithm="HS256")
+            
+        except Exception as e:
+            logger.error(f"Error generating token: {e}")
+            return None
+
+    def validate_token(self, token: str) -> Optional[Dict]:
+        """Validate JWT token and return payload"""
+        try:
+            payload = jwt.decode(token, self.jwt_secret, algorithms=["HS256"])
+            
+            # Check if user still exists and is active
+            user_id = payload.get("user_id")
+            user = self.users.get(user_id)
+            if not user or not user.active:
+                return None
+                
+            return payload
+            
+        except jwt.ExpiredSignatureError:
+            logger.warning("Token has expired")
+            return None
+        except jwt.InvalidTokenError as e:
+            logger.warning(f"Invalid token: {e}")
+            return None
+        except Exception as e:
+            logger.error(f"Error validating token: {e}")
+            return None
+
+    def deactivate_user(self, user_id: str) -> bool:
+        """Deactivate a user"""
+        try:
+            if user_id in self.users:
+                self.users[user_id].active = False
+                return True
+            return False
+        except Exception as e:
+            logger.error(f"Error deactivating user: {e}")
+            return False 
+
+
+================================================================================
+File: C:\aishrink\modules\security\encryption.py
+================================================================================
+
+from cryptography.fernet import Fernet
+from cryptography.hazmat.primitives import hashes
+from cryptography.hazmat.primitives.kdf.pbkdf2 import PBKDF2HMAC
+from cryptography.hazmat.primitives.asymmetric import rsa, padding
+from cryptography.hazmat.primitives import serialization
+import base64
+import os
+import logging
+from typing import Tuple, Optional
+
+logger = logging.getLogger(__name__)
+
+class EncryptionManager:
+    """
+    Handles symmetric and asymmetric encryption for secure communication
+    """
+    
+    def __init__(self, config):
+        self.config = config
+        
+        # Generate or load encryption keys
+        self._init_keys()
+        
+        # Create Fernet instance for symmetric encryption
+        self.fernet = Fernet(self.symmetric_key)
+        
+    def _init_keys(self):
+        """Initialize encryption keys"""
+        try:
+            # Generate symmetric key if not exists
+            self.symmetric_key = self._generate_symmetric_key()
+            
+            # Generate asymmetric keypair if not exists
+            self.private_key = rsa.generate_private_key(
+                public_exponent=65537,
+                key_size=2048
+            )
+            self.public_key = self.private_key.public_key()
+            
+            logger.info("Encryption keys initialized successfully")
+            
+        except Exception as e:
+            logger.error(f"Failed to initialize encryption keys: {e}")
+            raise
+
+    def _generate_symmetric_key(self) -> bytes:
+        """Generate a symmetric key using a password and salt"""
+        password = self.config["security"].get("encryption_password", "default_password").encode()
+        salt = os.urandom(16)
+        
+        kdf = PBKDF2HMAC(
+            algorithm=hashes.SHA256(),
+            length=32,
+            salt=salt,
+            iterations=100000,
+        )
+        
+        key = base64.urlsafe_b64encode(kdf.derive(password))
+        return key
+
+    def encrypt_symmetric(self, data: bytes) -> bytes:
+        """Encrypt data using symmetric encryption"""
+        try:
+            return self.fernet.encrypt(data)
+        except Exception as e:
+            logger.error(f"Symmetric encryption failed: {e}")
+            raise
+
+    def decrypt_symmetric(self, encrypted_data: bytes) -> bytes:
+        """Decrypt symmetrically encrypted data"""
+        try:
+            return self.fernet.decrypt(encrypted_data)
+        except Exception as e:
+            logger.error(f"Symmetric decryption failed: {e}")
+            raise
+
+    def encrypt_asymmetric(self, data: bytes, recipient_public_key) -> bytes:
+        """Encrypt data using recipient's public key"""
+        try:
+            encrypted = recipient_public_key.encrypt(
+                data,
+                padding.OAEP(
+                    mgf=padding.MGF1(algorithm=hashes.SHA256()),
+                    algorithm=hashes.SHA256(),
+                    label=None
+                )
+            )
+            return encrypted
+        except Exception as e:
+            logger.error(f"Asymmetric encryption failed: {e}")
+            raise
+
+    def decrypt_asymmetric(self, encrypted_data: bytes) -> bytes:
+        """Decrypt data using our private key"""
+        try:
+            decrypted = self.private_key.decrypt(
+                encrypted_data,
+                padding.OAEP(
+                    mgf=padding.MGF1(algorithm=hashes.SHA256()),
+                    algorithm=hashes.SHA256(),
+                    label=None
+                )
+            )
+            return decrypted
+        except Exception as e:
+            logger.error(f"Asymmetric decryption failed: {e}")
+            raise
+
+    def get_public_key_bytes(self) -> bytes:
+        """Export public key in PEM format"""
+        return self.public_key.public_bytes(
+            encoding=serialization.Encoding.PEM,
+            format=serialization.PublicFormat.SubjectPublicKeyInfo
+        )
+
+    def load_public_key(self, key_bytes: bytes):
+        """Load a public key from bytes"""
+        return serialization.load_pem_public_key(key_bytes)
+
+class SecureMessage:
+    """Helper class for encrypting/decrypting messages"""
+    
+    def __init__(self, encryption_manager: EncryptionManager):
+        self.encryption_manager = encryption_manager
+
+    def encrypt_message(self, message: dict, recipient_public_key=None) -> dict:
+        """
+        Encrypt a message, optionally using recipient's public key
+        Returns dict with encrypted data and metadata
+        """
+        try:
+            # Convert message to bytes
+            message_bytes = str(message).encode()
+            
+            if recipient_public_key:
+                # Asymmetric encryption
+                encrypted = self.encryption_manager.encrypt_asymmetric(
+                    message_bytes, 
+                    recipient_public_key
+                )
+                method = "asymmetric"
+            else:
+                # Symmetric encryption
+                encrypted = self.encryption_manager.encrypt_symmetric(message_bytes)
+                method = "symmetric"
+            
+            return {
+                "encrypted_data": base64.b64encode(encrypted).decode(),
+                "encryption_method": method
+            }
+            
+        except Exception as e:
+            logger.error(f"Message encryption failed: {e}")
+            raise
+
+    def decrypt_message(self, encrypted_message: dict) -> Optional[dict]:
+        """Decrypt a message"""
+        try:
+            encrypted_data = base64.b64decode(encrypted_message["encrypted_data"])
+            method = encrypted_message["encryption_method"]
+            
+            if method == "asymmetric":
+                decrypted = self.encryption_manager.decrypt_asymmetric(encrypted_data)
+            else:
+                decrypted = self.encryption_manager.decrypt_symmetric(encrypted_data)
+                
+            # Convert back to dict
+            return eval(decrypted.decode())  # Note: In production, use proper serialization
+            
+        except Exception as e:
+            logger.error(f"Message decryption failed: {e}")
+            return None 
+
+
+================================================================================
+File: C:\aishrink\prometheus\alerts.yml
+================================================================================
+
+groups:
+  - name: crawler_alerts
+    rules:
+      - alert: HighCrawlErrorRate
+        expr: rate(crawl_errors_total[5m]) > 0.1
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: High crawl error rate
+          description: "Crawler error rate is {{ $value }} errors per second"
+
+      - alert: CrawlerStalled
+        expr: rate(pages_crawled_total[15m]) == 0
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: Crawler has stalled
+          description: No pages have been crawled in the last 15 minutes
+
+  - name: knowledge_graph_alerts
+    rules:
+      - alert: HighConflictRate
+        expr: rate(conflicts_resolved_total{resolution_type="disputed"}[5m]) > 0.2
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: High rate of disputed facts
+          description: "{{ $value }} facts per second are being marked as disputed"
+
+      - alert: LowTruthConfidence
+        expr: histogram_quantile(0.5, rate(truth_confidence_bucket[5m])) < 0.6
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: Low truth confidence scores
+          description: "Median truth confidence has dropped below 0.6"
+
+  - name: system_alerts
+    rules:
+      - alert: HighMemoryUsage
+        expr: memory_usage_bytes / 1024 / 1024 > 1800  # 1.8GB
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: High memory usage
+          description: "Memory usage is {{ $value }}MB"
+
+      - alert: HighCPUUsage
+        expr: cpu_usage_percent > 80
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: High CPU usage
+          description: "CPU usage is {{ $value }}%" 
+
+
+================================================================================
+File: C:\aishrink\tests\test_cli.py
+================================================================================
+
+import pytest
+from unittest.mock import Mock, patch
+from cli import KnowledgeGraphCLI
+
+@pytest.fixture
+def mock_config():
+    return {
+        "knowledge_graph": {
+            "neo4j_uri": "bolt://localhost:7687",
+            "neo4j_user": "neo4j",
+            "neo4j_password": "password"
+        },
+        "security": {
+            "allowed_roles": ["admin", "user"]
+        }
+    }
+
+@pytest.fixture
+def cli(mock_config):
+    with patch('cli.KnowledgeGraphCLI._load_config', return_value=mock_config):
+        return KnowledgeGraphCLI()
+
+def test_set_official_truth_with_permission(cli):
+    # Mock access control to allow the operation
+    cli.access_control.check_permission = Mock(return_value=True)
+    cli.kg_manager.mark_as_official_truth = Mock(return_value=True)
+
+    result = cli.set_official_truth(
+        entity1="CompanyA",
+        relation="acquired",
+        entity2="StartupB",
+        admin_id="admin1"
+    )
+
+    assert result == True
+    cli.kg_manager.mark_as_official_truth.assert_called_once()
+
+def test_set_official_truth_without_permission(cli):
+    # Mock access control to deny the operation
+    cli.access_control.check_permission = Mock(return_value=False)
+
+    result = cli.set_official_truth(
+        entity1="CompanyA",
+        relation="acquired",
+        entity2="StartupB",
+        admin_id="user1"
+    )
+
+    assert result == False
+    assert not hasattr(cli.kg_manager, 'mark_as_official_truth.called')
+
+def test_list_relationships(cli):
+    mock_relationships = [
+        {
+            "entity1": "CompanyA",
+            "relation": "acquired",
+            "entity2": "StartupB",
+            "confidence": 0.9,
+            "source": "news.com",
+            "is_official": True,
+            "is_disputed": False
+        }
+    ]
+    
+    # Mock the session and run methods
+    mock_session = Mock()
+    mock_session.run.return_value = [Mock(**{"values.return_value": list(r.values())}) 
+                                    for r in mock_relationships]
+    
+    with patch.object(cli.kg_manager, 'driver') as mock_driver:
+        mock_driver.session.return_value.__enter__.return_value = mock_session
+        
+        results = cli.list_relationships(filter_type="official")
+        
+        assert len(results) == 1
+        assert results[0]["entity1"] == "CompanyA"
+        assert results[0]["is_official"] == True 
+
+
+================================================================================
+File: C:\aishrink\tests\test_config.yaml
+================================================================================
+
+node:
+  id: "test_node"
+  shard_range: [0, 9999]
+  role: "full"
+
+crawler:
+  max_pages_per_cycle: 5
+  user_agent: "TestCrawler/1.0"
+  politeness_delay: 0.1
+  start_urls:
+    - "https://example.com"
+
+dedup:
+  similarity_threshold: 0.9
+
+knowledge_graph:
+  neo4j_uri: "bolt://localhost:7687"
+  neo4j_user: "neo4j"
+  neo4j_password: "test"
+  conflict_policy: "store_disputed"
+
+security:
+  encryption_at_rest: true
+  encryption_in_flight: true
+  role_based_access: true
+  jwt_secret: "test_secret"
+  encryption_password: "test_password"
+  allowed_roles:
+    - admin
+    - analyst
+    - crawler 
+
+
+================================================================================
+File: C:\aishrink\tests\test_conflict_resolution.py
+================================================================================
+
+import pytest
+from modules.knowledge_graph.conflict_resolution import ConflictResolver
+
+@pytest.fixture
+def config():
+    return {
+        "knowledge_graph": {
+            "conflict_policy": "highest_confidence_wins",
+            "domain_trust_scores": {
+                "wikipedia.org": 0.9,
+                "gov": 0.8,
+                "edu": 0.8,
+            },
+            "bias_overrides": {
+                "official_sources": ["who.int", "cdc.gov"],
+                "domain_boost": {
+                    "nature.com": 1.8,
+                }
+            }
+        }
+    }
+
+def test_official_source_overrides_higher_confidence(config):
+    resolver = ConflictResolver(config)
+    
+    # Test that WHO (official) overrides higher confidence unofficial
+    result = resolver.resolve_conflict(
+        existing_edge={
+            "confidence": 0.9,
+            "source": "example.com"
+        },
+        new_edge={
+            "confidence": 0.7,
+            "source": "who.int/example"
+        }
+    )
+    
+    assert result.action == "overwrite"
+    assert result.final_confidence > 1.0  # Should be boosted
+
+def test_official_truth_protection(config):
+    resolver = ConflictResolver(config)
+    
+    # Test that official_truth is protected from non-official sources
+    result = resolver.resolve_conflict(
+        existing_edge={
+            "confidence": 0.7,
+            "source": "cdc.gov",
+            "official_truth": True
+        },
+        new_edge={
+            "confidence": 0.9,
+            "source": "example.com"
+        }
+    )
+    
+    assert result.action == "keep_existing"
+
+def test_domain_boost_applied(config):
+    resolver = ConflictResolver(config)
+    
+    result = resolver.resolve_conflict(
+        existing_edge={
+            "confidence": 0.7,
+            "source": "example.com"
+        },
+        new_edge={
+            "confidence": 0.6,
+            "source": "nature.com/article"
+        }
+    )
+    
+    assert result.action == "overwrite"  # Should win due to domain boost 
+
+def test_multiple_domain_boosts(config):
+    """Test that multiple domain boosts don't stack inappropriately"""
+    resolver = ConflictResolver(config)
+    
+    result = resolver.resolve_conflict(
+        existing_edge={
+            "confidence": 0.5,
+            "source": "example.com"
+        },
+        new_edge={
+            "confidence": 0.5,
+            "source": "nature.com.science.org"  # Should only apply highest boost
+        }
+    )
+    
+    # Should use highest boost (1.8) not multiply both
+    assert result.final_confidence <= 0.5 * 1.8
+
+def test_invalid_source_handling(config):
+    """Test that invalid sources don't crash the resolver"""
+    resolver = ConflictResolver(config)
+    
+    result = resolver.resolve_conflict(
+        existing_edge={
+            "confidence": 0.5,
+            "source": None
+        },
+        new_edge={
+            "confidence": 0.5,
+            "source": "invalid://url"
+        }
+    )
+    
+    assert result.action in ["keep_existing", "overwrite"]
+    assert 0 <= result.final_confidence <= 1.0 
+
+
+================================================================================
+File: C:\aishrink\tests\test_end_to_end.py
+================================================================================
+
+import pytest
+import asyncio
+import yaml
+from pathlib import Path
+from modules.security.access_control import AccessControl
+from modules.security.encryption import EncryptionManager, SecureMessage
+from modules.messaging.message_bus import MessageBus
+from modules.crawler.frontier_manager import FrontierManager
+
+@pytest.fixture
+def config():
+    """Load test configuration"""
+    config_path = Path(__file__).parent / "test_config.yaml"
+    with open(config_path, 'r') as f:
+        return yaml.safe_load(f)
+
+@pytest.fixture
+def access_control(config):
+    """Initialize access control"""
+    return AccessControl(config)
+
+@pytest.fixture
+def encryption_manager(config):
+    """Initialize encryption manager"""
+    return EncryptionManager(config)
+
+@pytest.fixture
+def message_bus(config):
+    """Initialize message bus"""
+    bus = MessageBus(config)
+    yield bus
+    bus.close()
+
+class TestSecurity:
+    def test_user_roles(self, access_control):
+        """Test user role management"""
+        # Add test user
+        result = access_control.add_user(
+            user_id="test1",
+            username="testuser",
+            roles={"crawler"}
+        )
+        assert result is True
+        
+        # Check permissions
+        assert access_control.check_permission("test1", "read:urls") is True
+        assert access_control.check_permission("test1", "manage:users") is False
+
+    def test_token_lifecycle(self, access_control):
+        """Test JWT token generation and validation"""
+        # Add test user
+        access_control.add_user(
+            user_id="test2",
+            username="testuser2",
+            roles={"analyst"}
+        )
+        
+        # Generate token
+        token = access_control.generate_token("test2")
+        assert token is not None
+        
+        # Validate token
+        payload = access_control.validate_token(token)
+        assert payload is not None
+        assert payload["user_id"] == "test2"
+        assert "analyst" in payload["roles"]
+
+class TestMessaging:
+    @pytest.mark.asyncio
+    async def test_pub_sub(self, message_bus):
+        """Test basic publish/subscribe functionality"""
+        received_messages = []
+        
+        def callback(message):
+            received_messages.append(message)
+        
+        # Subscribe to test topic
+        message_bus.subscribe("test_topic", callback)
+        
+        # Publish message
+        test_data = {"key": "value"}
+        message_bus.publish("test_topic", test_data)
+        
+        # Wait briefly for message processing
+        await asyncio.sleep(0.1)
+        
+        assert len(received_messages) == 1
+        assert received_messages[0]["key"] == "value"
+
+class TestCrawler:
+    def test_frontier_management(self, config, message_bus):
+        """Test URL frontier functionality"""
+        frontier = FrontierManager(config, message_bus)
+        
+        # Add test URLs
+        test_urls = [
+            "https://example.com/1",
+            "https://example.com/2",
+            "https://example.com/3"
+        ]
+        frontier.add_urls(test_urls)
+        
+        # Get batch
+        batch = frontier.get_next_batch()
+        assert len(batch) > 0
+        assert all(url in test_urls for url in batch)
+
+@pytest.mark.asyncio
+async def test_system_startup(config):
+    """Test that the system can start up and shut down cleanly"""
+    from main import DecentralizedPipeline
+    
+    pipeline = DecentralizedPipeline()
+    await pipeline.initialize()
+    
+    # Start pipeline in background task
+    task = asyncio.create_task(pipeline.start())
+    
+    # Let it run briefly
+    await asyncio.sleep(2)
+    
+    # Signal shutdown
+    pipeline.running = False
+    
+    # Wait for shutdown
+    await task 
+
+
+================================================================================
+File: C:\aishrink\tests\test_sharding.py
+================================================================================
+
+import pytest
+from modules.knowledge_graph.shard_manager import ShardManager
+
+@pytest.fixture
+def shard_config():
+    return {
+        "node": {
+            "id": "node1"
+        },
+        "sharding": {
+            "enabled": True,
+            "nodes": {
+                "node1": {
+                    "host": "host1",
+                    "port": 7687,
+                    "role": "full"
+                },
+                "node2": {
+                    "host": "host2",
+                    "port": 7687,
+                    "role": "full"
+                }
+            }
+        }
+    }
+
+def test_shard_distribution(shard_config):
+    manager = ShardManager(shard_config, "node1")
+    
+    # Test consistent hashing
+    entity1 = "Company_A"
+    entity2 = "Company_B"
+    
+    shard1 = manager.get_shard_for_entity(entity1)
+    shard2 = manager.get_shard_for_entity(entity2)
+    
+    # Same entity should always map to same shard
+    assert shard1 == manager.get_shard_for_entity(entity1)
+    
+    # Entities should be distributed
+    total_entities = 1000
+    shard_counts = {}
+    
+    for i in range(total_entities):
+        entity = f"Entity_{i}"
+        shard = manager.get_shard_for_entity(entity)
+        shard_counts[shard.node_id] = shard_counts.get(shard.node_id, 0) + 1
+    
+    # Check reasonable distribution (roughly equal)
+    expected_per_shard = total_entities / len(shard_config["sharding"]["nodes"])
+    for count in shard_counts.values():
+        assert abs(count - expected_per_shard) < expected_per_shard * 0.2
+
+def test_local_entity_handling(shard_config):
+    manager = ShardManager(shard_config, "node1")
+    
+    # Test if node correctly identifies its entities
+    local_entity = None
+    remote_entity = None
+    
+    # Find an entity that hashes to our shard
+    for i in range(1000):
+        entity = f"Entity_{i}"
+        if manager.should_handle_entity(entity):
+            local_entity = entity
+        else:
+            remote_entity = entity
+        if local_entity and remote_entity:
+            break
+    
+    assert manager.should_handle_entity(local_entity)
+    assert not manager.should_handle_entity(remote_entity) 
+

@@ -1,0 +1,73 @@
+node:
+  id: "node1"
+  shard_range: [0, 9999]
+  role: "full"
+
+crawler:
+  max_pages_per_cycle: 50
+  user_agent: "DecentralizedCrawler/1.0"
+  politeness_delay: 1.0
+  start_urls:
+    - "https://example.com"
+    - "https://wikipedia.org"
+
+dedup:
+  similarity_threshold: 0.9
+
+knowledge_graph:
+  neo4j_uri: "bolt://neo4j:7687"
+  neo4j_user: "neo4j"
+  # neo4j_password is loaded from Docker secrets
+  
+  # Added bias configuration
+  domain_trust_scores:
+    wikipedia.org: 0.9
+    gov: 0.8
+    edu: 0.8
+    blogspot.com: 0.3
+  
+  bias_overrides:
+    official_sources:
+      - "worldhealth.org"
+      - "who.int"
+      - "cdc.gov"
+    domain_boost:
+      "nytimes.com": 1.5
+      "reuters.com": 1.4
+      "nature.com": 1.8
+      "science.org": 1.8
+
+security:
+  encryption_at_rest: true
+  encryption_in_flight: true
+  role_based_access: true
+  allowed_roles:
+    - admin
+    - analyst
+    - crawler
+  # encryption_key is loaded from Docker secrets
+
+security:
+  encryption_at_rest: true
+  encryption_in_flight: true
+  role_based_access: true
+  allowed_roles:
+    - admin
+    - analyst
+    - crawler
+
+sharding:
+  enabled: true
+  nodes:
+    node1:
+      host: "crawler_node1"
+      port: 7687
+      role: "full"
+    node2:
+      host: "crawler_node2"
+      port: 7687
+      role: "crawler"
+    kg_node:
+      host: "kg_node"
+      port: 7687
+      role: "kg" 

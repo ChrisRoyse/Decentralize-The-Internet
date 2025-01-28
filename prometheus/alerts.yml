@@ -1,0 +1,60 @@
+groups:
+  - name: crawler_alerts
+    rules:
+      - alert: HighCrawlErrorRate
+        expr: rate(crawl_errors_total[5m]) > 0.1
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: High crawl error rate
+          description: "Crawler error rate is {{ $value }} errors per second"
+
+      - alert: CrawlerStalled
+        expr: rate(pages_crawled_total[15m]) == 0
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: Crawler has stalled
+          description: No pages have been crawled in the last 15 minutes
+
+  - name: knowledge_graph_alerts
+    rules:
+      - alert: HighConflictRate
+        expr: rate(conflicts_resolved_total{resolution_type="disputed"}[5m]) > 0.2
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: High rate of disputed facts
+          description: "{{ $value }} facts per second are being marked as disputed"
+
+      - alert: LowTruthConfidence
+        expr: histogram_quantile(0.5, rate(truth_confidence_bucket[5m])) < 0.6
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: Low truth confidence scores
+          description: "Median truth confidence has dropped below 0.6"
+
+  - name: system_alerts
+    rules:
+      - alert: HighMemoryUsage
+        expr: memory_usage_bytes / 1024 / 1024 > 1800  # 1.8GB
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: High memory usage
+          description: "Memory usage is {{ $value }}MB"
+
+      - alert: HighCPUUsage
+        expr: cpu_usage_percent > 80
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: High CPU usage
+          description: "CPU usage is {{ $value }}%" 
