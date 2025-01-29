@@ -160,21 +160,15 @@ pytest tests/
 4. Push to the branch (`git push origin feature/amazing-feature`)
 5. Open a Pull Request
 
-## Documentation
-
-For detailed documentation on:
-- [LLM Agent Framework](docs/llm_agents.md)
-- [Quantum Reasoning Engine](docs/quantum_reasoning.md)
-- [Truth Maintenance System](docs/truth_maintenance.md)
-- [Monitoring & Alerts](docs/monitoring.md)
-
 ## License
 
 This project is licensed under the MIT License - see the LICENSE file for details.
 
 ## Acknowledgments
 
-- DeepSeek team for the LLM model
+- DeepSeek team for the LLM model (temporarily)
 - Neo4j team for the graph database
 - Prometheus/Grafana teams for monitoring tools
 - Python community for excellent libraries
+
+###The first person to fund me 1 Million Dollars will be shown how this can make them infinite money.
