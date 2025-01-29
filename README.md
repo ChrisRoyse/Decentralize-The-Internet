@@ -164,11 +164,3 @@ pytest tests/
 
 This project is licensed under the MIT License - see the LICENSE file for details.
 
-## Acknowledgments
-
-- DeepSeek team for the LLM model (temporarily)
-- Neo4j team for the graph database
-- Prometheus/Grafana teams for monitoring tools
-- Python community for excellent libraries
-
-# The first person to fund me 1 Million dollars will be shown how this can make them infinite money.
