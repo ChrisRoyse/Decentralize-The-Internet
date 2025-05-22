@@ -1,0 +1,78 @@
+entity_types:
+  - Person
+  - Organization
+  - Location
+  - Event
+  - Concept # Abstract ideas, topics, categories
+  - CreativeWork # Books, movies, software, articles
+  - Thing # Generic fallback for entities not fitting above
+
+relationship_types:
+  # General Relationships
+  relatedTo:
+    domain: Thing
+    range: Thing
+  instanceOf:
+    domain: Thing # e.g., "Paris" instanceOf "City"
+    range: Concept
+  subclassOf: # For hierarchical concepts
+    domain: Concept 
+    range: Concept
+  partOf:
+    domain: Thing
+    range: Thing
+  hasProperty: # For key-value like properties not fitting other relations
+    domain: Thing
+    range: Thing # Range could be a literal node or a simple string property
+
+  # Person specific
+  knows:
+    domain: Person
+    range: Person
+  worksFor:
+    domain: Person
+    range: Organization
+  memberOf:
+    domain: Person
+    range: Organization # Could also be Event, Concept group etc.
+
+  # Organization specific
+  employs:
+    domain: Organization
+    range: Person
+  hasSubsidiary:
+    domain: Organization
+    range: Organization
+  
+  # Location specific
+  locatedIn: # For precise location containment
+    domain: Thing # Person, Organization, Event, Location can be locatedIn a Location
+    range: Location
+  adjacentTo:
+    domain: Location
+    range: Location
+
+  # Event specific
+  occursAt:
+    domain: Event
+    range: Location
+  hasParticipant:
+    domain: Event
+    range: Person # Or Organization
+  startsAt:
+    domain: Event
+    range: DateTime # Neo4j temporal type or ISO string
+  endsAt:
+    domain: Event
+    range: DateTime
+
+  # CreativeWork specific
+  createdBy:
+    domain: CreativeWork
+    range: Person # Or Organization
+  mentions: # A work mentions an entity
+    domain: CreativeWork
+    range: Thing
+  about: # A work is about a concept or entity
+    domain: CreativeWork
+    range: Thing # Often a Concept
