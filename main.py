@@ -11,6 +11,7 @@ import structlog
 from modules.crawler.crawler_agent import CrawlerAgent
 from modules.crawler.frontier_manager import FrontierManager
 from modules.ingestion.dedup import DeduplicationManager
+from modules.ingestion.compression import Compressor, GPUCompressor
 from modules.ingestion.embeddings import EmbeddingModel
 from modules.knowledge_graph.graph_manager import KnowledgeGraphManager
 from modules.knowledge_graph.entity_extraction import EntityExtractor
@@ -82,7 +83,32 @@ class DecentralizedPipeline:
             
             # Initialize ingestion components
             self.components["dedup_manager"] = DeduplicationManager(self.config)
-            self.components["compressor"] = Compressor()
+            
+            # Conditionally initialize Compressor or GPUCompressor
+            use_gpu_compressor = False
+            try:
+                import torch
+                if torch.cuda.is_available():
+                    logger.info("CUDA GPU detected. Attempting to use GPUCompressor.")
+                    use_gpu_compressor = True
+                else:
+                    logger.info("CUDA GPU not detected by torch. Using standard Compressor.")
+            except ImportError:
+                logger.info("torch not installed. Using standard Compressor.")
+            except Exception as e:
+                logger.warning(f"An unexpected error occurred during torch/CUDA check: {e}. Defaulting to standard Compressor.")
+
+            if use_gpu_compressor:
+                try:
+                    self.components["compressor"] = GPUCompressor()
+                    # GPUCompressor __init__ already logs its cupy status
+                    logger.info("GPUCompressor initialized.")
+                except Exception as e:
+                    logger.error(f"Failed to initialize GPUCompressor: {e}. Falling back to standard Compressor.")
+                    self.components["compressor"] = Compressor()
+            else:
+                self.components["compressor"] = Compressor()
+                logger.info("Standard Compressor initialized.")
             
             # Initialize crawler components
             self.components["frontier_manager"] = FrontierManager(
